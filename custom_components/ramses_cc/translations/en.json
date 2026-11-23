@@ -933,6 +933,12 @@
             },
             "reset_filter_counter": {
                 "name": "Reset Filter Counter"
+            },
+            "create_remote": {
+                "name": "Create remote"
+            },
+            "bind_remote": {
+                "name": "Bind remote"
             }
         },
         "select": {

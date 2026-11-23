@@ -8,7 +8,9 @@ pressed. This module provides:
 - gateway-level buttons that invoke the integration's own domain-wide
   services (see ./services.yaml), and
 - per-FAN buttons that reset the filter counter (W 10D0) via the
-  ``reset_filter_counter`` entity service (see ./remote.py).
+  ``reset_filter_counter`` entity service (see ./remote.py), and
+- per-FAN pairing buttons that create a faked remote for the FAN and
+  bind it (``add_faked_rem`` / ``bind_device``).
 
 The button platform may be set up before the HGIs are loaded or before
 the remote platform has registered the FAN REM entities. A discovery
@@ -22,7 +24,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from homeassistant.components.button import (
     ButtonEntity,
@@ -30,6 +32,7 @@ from homeassistant.components.button import (
 )
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import (
     entity_platform,
     entity_registry as er,
@@ -43,10 +46,23 @@ from ramses_rf.const import DevType
 from ramses_rf.devices import HgiGateway, HvacVentilator
 from ramses_rf.entity import Entity as RamsesRFEntity
 
-from .const import DOMAIN, SVC_DISCOVER_KNOWN_DEVICES
+from .const import (
+    CONF_SCHEMA,
+    DOMAIN,
+    SVC_ADD_FAKED_REM,
+    SVC_DISCOVER_KNOWN_DEVICES,
+    SZ_TR_ALIAS,
+    SZ_TR_BOUND,
+    SZ_TR_FAKED,
+)
 from .entity import RamsesEntity, RamsesEntityDescription
-from .helpers import device_slug, normalize_device_id
+from .helpers import (
+    configured_hvac_strategy,
+    device_slug,
+    normalize_device_id,
+)
 from .schemas import (
+    SVC_BIND_DEVICE,
     SVC_FORCE_UPDATE,
     SVC_RESET_FILTER,
     SVC_SYNC_TOPOLOGY,
@@ -94,6 +110,13 @@ HGI_BUTTON_DESCRIPTIONS: tuple[RamsesButtonEntityDescription, ...] = (
 )
 
 FILTER_RESET_KEY = "reset_filter_counter"
+CREATE_REMOTE_KEY = "create_remote"
+BIND_REMOTE_KEY = "bind_remote"
+
+#: Binding offer when the FAN has no strategy (the Orcon/Itho/Vasco set)
+_DEFAULT_BINDING_CODES: Final = ("22F1", "22F3")
+#: add_faked_rem accepts an alias of at most 50 characters
+_MAX_ALIAS_LEN: Final = 50
 
 
 class RamsesButtonBase(RamsesEntity, ButtonEntity):
@@ -140,6 +163,144 @@ class RamsesButtonBase(RamsesEntity, ButtonEntity):
         }
 
 
+class RamsesFanPairingButton(RamsesButtonBase):
+    """FAN button that creates or binds the FAN's faked remote.
+
+    Pairing a faked remote with a FAN takes two steps, which these
+    buttons put on the FAN's device page:
+
+    - ``create_remote``: create a faked REM bound to the FAN, with the
+      FAN's address in the ``37:`` range (``32:150093`` →
+      ``37:150093``).  This only changes the schema; nothing is sent.
+    - ``bind_remote``: send the binding offer from the FAN's bound,
+      faked REM, using the codes of the FAN's HVAC strategy.  The FAN
+      only accepts it in its pairing window (e.g. 5 minutes after a
+      Meltem unit is powered on).
+    """
+
+    @property
+    def available(self) -> bool:
+        """Return True: pairing works while the FAN isn't heard.
+
+        Create remote doesn't talk to the FAN, and a FAN that was just
+        power-cycled for binding may not have been heard yet.
+
+        :return: Always True.
+        """
+        return True
+
+    def _schema(self) -> dict[str, Any]:
+        """Return the system schema from the config entry options."""
+        return dict(self.coordinator.options.get(CONF_SCHEMA, {}))
+
+    def _bound_rem_id(self) -> str | None:
+        """Return the FAN's bound REM, from ramses_rf or the schema.
+
+        A REM just created by ``create_remote`` is in the schema before
+        ramses_rf has loaded it, so the schema is checked too.
+        """
+        getter = getattr(self._device, "get_bound_rem", None)
+        if callable(getter) and (rem_id := getter()):
+            return str(rem_id)
+        bound = self._schema().get(self._device.id, {}).get(SZ_TR_BOUND)
+        return str(bound) if bound else None
+
+    def _is_faked(self, rem_id: str) -> bool:
+        """Return True if the REM is faked (in ramses_rf or the schema)."""
+        if (rem := self.coordinator.get_device(rem_id)) is not None:
+            return bool(rem.is_faked)
+        return bool(self._schema().get(rem_id, {}).get(SZ_TR_FAKED))
+
+    async def async_press(self) -> None:
+        """Create or bind the FAN's faked remote.
+
+        :raises HomeAssistantError: If the step doesn't apply to the FAN
+            (e.g. it already has a remote, or has no faked remote to bind).
+        """
+        if self.entity_description.key == CREATE_REMOTE_KEY:
+            await self._async_create_remote()
+        else:
+            await self._async_bind_remote()
+
+    async def _async_create_remote(self) -> None:
+        """Create a faked REM bound to the FAN."""
+        fan_id = self._device.id
+        if bound := self._bound_rem_id():
+            raise HomeAssistantError(
+                f"FAN {fan_id} already has a remote ({bound}); "
+                "use Bind remote to pair it"
+            )
+        rem_id = f"37:{fan_id.split(':', 1)[1]}"
+        if self.coordinator.get_device(rem_id) is not None or (
+            rem_id in self._schema()
+        ):
+            raise HomeAssistantError(
+                f"Address {rem_id} is already in use; create the remote "
+                "with the add_faked_rem action and another 37: address"
+            )
+        fan_alias = self._schema().get(fan_id, {}).get(SZ_TR_ALIAS) or fan_id
+        alias = f"Virtual REM {fan_alias}"[:_MAX_ALIAS_LEN]
+        _LOGGER.info("Creating faked REM %s for FAN %s", rem_id, fan_id)
+        await self.hass.services.async_call(
+            DOMAIN,
+            SVC_ADD_FAKED_REM,
+            service_data={
+                "device_id": rem_id,
+                "bound_to": fan_id,
+                "alias": alias,
+            },
+            blocking=True,
+        )
+
+    async def _async_bind_remote(self) -> None:
+        """Send the binding offer from the FAN's faked REM."""
+        fan_id = self._device.id
+        rem_id = self._bound_rem_id()
+        if rem_id is None:
+            raise HomeAssistantError(
+                f"FAN {fan_id} has no remote to bind; press Create remote "
+                "first"
+            )
+        if not self._is_faked(rem_id):
+            raise HomeAssistantError(
+                f"Remote {rem_id} of FAN {fan_id} is a real remote; only a "
+                "faked remote can be bound from Home Assistant"
+            )
+        strategy = configured_hvac_strategy(self._device)
+        codes = (
+            tuple(str(code) for code in strategy.binding_codes())
+            if strategy is not None
+            else _DEFAULT_BINDING_CODES
+        )
+        offer = {code: "00" for code in codes}
+        _LOGGER.info(
+            "Binding faked REM %s to FAN %s (offer %s)", rem_id, fan_id, offer
+        )
+        await self.hass.services.async_call(
+            DOMAIN,
+            SVC_BIND_DEVICE,
+            service_data={"device_id": rem_id, "offer": offer},
+            blocking=True,
+        )
+
+
+#: Pairing buttons on every FAN device page
+FAN_PAIRING_DESCRIPTIONS: tuple[RamsesButtonEntityDescription, ...] = (
+    RamsesButtonEntityDescription(
+        key=CREATE_REMOTE_KEY,
+        translation_key=CREATE_REMOTE_KEY,
+        icon="mdi:remote",
+        entity_category=EntityCategory.CONFIG,
+    ),
+    RamsesButtonEntityDescription(
+        key=BIND_REMOTE_KEY,
+        translation_key=BIND_REMOTE_KEY,
+        icon="mdi:link-variant",
+        entity_category=EntityCategory.CONFIG,
+    ),
+)
+
+
 def _fan_remote_entity(
     ent_reg: er.EntityRegistry, entry_id: str, fan_id: str
 ) -> er.RegistryEntry | None:
@@ -183,6 +344,25 @@ class _ButtonFactory:
             button
             for description in HGI_BUTTON_DESCRIPTIONS
             if (button := self._make_button(hgi, description, device_id))
+        ]
+
+    def pairing_buttons(self, fan: RamsesRFEntity) -> list[RamsesButtonBase]:
+        """Create the Create remote / Bind remote buttons for a FAN.
+
+        Created for every FAN: whether a step applies (no remote yet, or
+        a faked remote to bind) is checked when the button is pressed.
+        """
+        if not isinstance(fan, HvacVentilator) or fan.id is None:
+            return []
+        device_id = normalize_device_id(fan.id)
+        return [
+            button
+            for description in FAN_PAIRING_DESCRIPTIONS
+            if (
+                button := self._make_button(
+                    fan, description, device_id, RamsesFanPairingButton
+                )
+            )
         ]
 
     def fan_buttons(self, fan: RamsesRFEntity) -> list[RamsesButtonBase]:
@@ -266,7 +446,7 @@ class _ButtonFactory:
             case DevType.HGI:
                 return self.hgi_buttons(device)
             case "FAN":
-                return self.fan_buttons(device)
+                return self.pairing_buttons(device) + self.fan_buttons(device)
             case _:
                 return []
 
@@ -275,6 +455,7 @@ class _ButtonFactory:
         device: RamsesRFEntity,
         description: RamsesButtonEntityDescription,
         device_id: str,
+        button_cls: type[RamsesButtonBase] = RamsesButtonBase,
     ) -> RamsesButtonBase | None:
         """Create a button unless its unique_id was already created."""
         unique_id = f"{device_id}-{description.key}"
@@ -295,7 +476,7 @@ class _ButtonFactory:
             )
 
         self._known_unique_ids.add(unique_id)
-        button = RamsesButtonBase(self._coordinator, device, description)
+        button = button_cls(self._coordinator, device, description)
         button._attr_unique_id = unique_id
         return button
 

@@ -5,7 +5,7 @@ M-WRG-S M unit (32:150093, Nov 2026).
 """
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.components.climate.const import (
@@ -13,8 +13,13 @@ from homeassistant.components.climate.const import (
     HVACMode,
 )
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import entity_registry as er
 
 from custom_components.ramses_cc.climate import RamsesHvac
+from custom_components.ramses_cc.entity import (
+    RamsesEntity,
+    RamsesEntityDescription,
+)
 from custom_components.ramses_cc.meltem import (
     MELTEM_FAN_MODES,
     airflow_code,
@@ -527,3 +532,118 @@ def test_remote_is_on_non_meltem_always_on() -> None:
 
     # Act / Assert
     assert remote.is_on is True
+
+
+# --- hide entities a Meltem unit never fills -------------------------------
+
+
+def _meltem_entity(
+    key: str, model: str | None = "VMD-22RES22"
+) -> tuple[RamsesEntity, MagicMock]:
+    """Return a RamsesEntity on a mock Meltem FAN, with a mock registry."""
+    device = MagicMock(spec=HvacVentilator)
+    device.id = FAN_ID
+    device.model = model
+    entity = RamsesEntity(
+        MagicMock(), device, RamsesEntityDescription(key=key)
+    )
+    entity.hass = MagicMock()
+    entity.entity_id = f"sensor.32_150093_{key.lower()}"
+    registry = MagicMock()
+    registry.async_get.return_value = MagicMock(hidden_by=None, options={})
+    return entity, registry
+
+
+def _hide(entity: RamsesEntity, registry: MagicMock) -> None:
+    """Run the hide check with the mock registry."""
+    with patch(
+        "custom_components.ramses_cc.entity.er.async_get",
+        return_value=registry,
+    ):
+        entity._hide_unused_meltem_entity()
+
+
+def test_unused_meltem_entity_hidden_by_default() -> None:
+    # Arrange
+    unused, _ = _meltem_entity("indoor_humidity")
+    used, _ = _meltem_entity("supply_fan_speed")
+    other_fan, _ = _meltem_entity("indoor_humidity", model="VMD-15RMS86")
+
+    # Act / Assert
+    assert unused.entity_registry_visible_default is False
+    assert used.entity_registry_visible_default is True
+    assert other_fan.entity_registry_visible_default is True
+
+
+def test_unused_meltem_entity_hidden_once_with_marker() -> None:
+    # Arrange
+    entity, registry = _meltem_entity("param_CF")
+
+    # Act
+    _hide(entity, registry)
+    _hide(entity, registry)  # second call is a no-op
+
+    # Assert
+    registry.async_update_entity.assert_called_once_with(
+        entity.entity_id, hidden_by=er.RegistryEntryHider.INTEGRATION
+    )
+    registry.async_update_entity_options.assert_called_once_with(
+        entity.entity_id, "ramses_cc", {"meltem_hidden": True}
+    )
+
+
+def test_unhidden_meltem_entity_stays_visible() -> None:
+    # Arrange: hidden before, then unhidden by the user
+    entity, registry = _meltem_entity("frost_cycle")
+    registry.async_get.return_value = MagicMock(
+        hidden_by=None, options={"ramses_cc": {"meltem_hidden": True}}
+    )
+
+    # Act
+    _hide(entity, registry)
+
+    # Assert
+    registry.async_update_entity.assert_not_called()
+    registry.async_update_entity_options.assert_not_called()
+
+
+def test_user_hidden_meltem_entity_keeps_user_hider() -> None:
+    # Arrange
+    entity, registry = _meltem_entity("co2_level")
+    registry.async_get.return_value = MagicMock(
+        hidden_by=er.RegistryEntryHider.USER, options={}
+    )
+
+    # Act
+    _hide(entity, registry)
+
+    # Assert: only the marker is set
+    registry.async_update_entity.assert_not_called()
+    registry.async_update_entity_options.assert_called_once()
+
+
+def test_meltem_hide_retried_until_model_known() -> None:
+    # Arrange: 10E0 not received yet
+    entity, registry = _meltem_entity("indoor_temp", model=None)
+
+    # Act
+    _hide(entity, registry)
+    entity._device.model = "VMD-22RES22"
+    _hide(entity, registry)
+
+    # Assert
+    registry.async_update_entity.assert_called_once()
+
+
+def test_used_or_non_meltem_entity_never_hidden() -> None:
+    # Arrange
+    used, used_reg = _meltem_entity("exhaust_fan_speed")
+    other, other_reg = _meltem_entity("indoor_temp", model="VMD-15RMS86")
+
+    # Act
+    _hide(used, used_reg)
+    _hide(other, other_reg)
+
+    # Assert
+    used_reg.async_update_entity.assert_not_called()
+    other_reg.async_update_entity.assert_not_called()

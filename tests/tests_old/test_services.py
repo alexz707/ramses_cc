@@ -103,7 +103,7 @@ NUM_SVCS_AFTER = (
 # Passive scan services (registered when advanced_features.passive_scan
 # is enabled, e.g. after v2→v3 migration).  7 services.
 _NUM_PASSIVE_SCAN_SVCS = 7
-NUM_ENTS_AFTER = 129  # proxy for success (issue 1210 + 4 model sensors, issue 1216: -1 REM fan_rate, +15 last_message_sent, issue 1310: +8 polling_interval, issue 1323: +1 system_mode select)
+NUM_ENTS_AFTER = 131  # proxy for success (+2 FAN pairing buttons, issue 1210 + 4 model sensors, issue 1216: -1 REM fan_rate, +15 last_message_sent, issue 1310: +8 polling_interval, issue 1323: +1 system_mode select)
 NUM_ENTS_AFTER_ALT = (
     NUM_ENTS_AFTER - 9
 )  # adjust number to subtract when adding sensors in sensor.py etc.

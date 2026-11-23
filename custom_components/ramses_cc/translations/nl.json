@@ -931,6 +931,12 @@
             },
             "reset_filter_counter": {
                 "name": "Reset Filter-teller"
+            },
+            "create_remote": {
+                "name": "Afstandsbediening aanmaken"
+            },
+            "bind_remote": {
+                "name": "Afstandsbediening koppelen"
             }
         },
         "select": {

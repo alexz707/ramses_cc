@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.const import ATTR_ID
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import EntityDescription
@@ -23,6 +24,7 @@ from .helpers import (
     reset_async_attr_cooldown,
     resolve_async_attr,
 )
+from .meltem import MELTEM_HIDDEN_KEYS, is_meltem
 
 if TYPE_CHECKING:
     from homeassistant.helpers.device_registry import ChildDeviceInfo
@@ -30,6 +32,9 @@ if TYPE_CHECKING:
     from .coordinator import RamsesCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+#: Entity registry option: hidden once because a Meltem unit never fills it
+_OPT_MELTEM_HIDDEN = "meltem_hidden"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -81,6 +86,8 @@ class RamsesEntity(CoordinatorEntity):
         self._update_lock = asyncio.Lock()
         self._dropped_updates: int = 0
         self._last_drop_report: float = time.monotonic()
+        # set once the Meltem hide-by-default check is settled
+        self._meltem_hide_checked: bool = False
 
     @property
     def device(self) -> RamsesRFEntity:
@@ -192,6 +199,7 @@ class RamsesEntity(CoordinatorEntity):
         await super().async_added_to_hass()
         if self.unique_id:
             self.coordinator.entities[self.unique_id] = self
+        self._hide_unused_meltem_entity()
 
         # Listen for device-specific update signal
         device_signal = f"{SIGNAL_UPDATE}_{self._device.id}"
@@ -232,4 +240,63 @@ class RamsesEntity(CoordinatorEntity):
 
         async with self._update_lock:
             reset_async_attr_cooldown(self)
+            # retried until the unit's 10E0 model is known
+            self._hide_unused_meltem_entity()
             self.async_write_ha_state()
+
+    @property
+    def entity_registry_visible_default(self) -> bool:
+        """Return False for entities a Meltem unit never fills.
+
+        :return: Whether the entity is visible when first registered.
+        """
+        if self._is_unused_meltem_entity():
+            return False
+        return super().entity_registry_visible_default
+
+    def _is_unused_meltem_entity(self) -> bool:
+        """Return True if this entity has no data on a Meltem unit."""
+        return self._description_key() in MELTEM_HIDDEN_KEYS and is_meltem(
+            self._device
+        )
+
+    def _description_key(self) -> str | None:
+        """Return the entity description's key, if there is one."""
+        description = getattr(self, "entity_description", None)
+        return getattr(description, "key", None)
+
+    def _hide_unused_meltem_entity(self) -> None:
+        """Hide an entity a Meltem unit never fills, once.
+
+        Covers entities registered before the unit was recognised (its
+        10E0 model arrives after the first setup).  A marker in the
+        entity's registry options records that this was done, so an
+        entity the user has unhidden stays visible.
+        """
+        if getattr(self, "_meltem_hide_checked", False):
+            return
+        if self._description_key() not in MELTEM_HIDDEN_KEYS:
+            self._meltem_hide_checked = True
+            return
+        if not is_meltem(self._device):
+            return  # model may not be known yet: check again later
+        if self.hass is None or not self.entity_id:
+            return
+        self._meltem_hide_checked = True
+
+        ent_reg = er.async_get(self.hass)
+        if (entry := ent_reg.async_get(self.entity_id)) is None:
+            return
+        options = dict(entry.options.get(DOMAIN, {}))
+        if options.get(_OPT_MELTEM_HIDDEN):
+            return  # done before; respect the user's choice since then
+        if entry.hidden_by is None:
+            _LOGGER.debug(
+                "Hiding %s: not used by Meltem units", self.entity_id
+            )
+            ent_reg.async_update_entity(
+                self.entity_id, hidden_by=er.RegistryEntryHider.INTEGRATION
+            )
+        ent_reg.async_update_entity_options(
+            self.entity_id, DOMAIN, options | {_OPT_MELTEM_HIDDEN: True}
+        )

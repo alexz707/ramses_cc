@@ -7,20 +7,28 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.ramses_cc.button import (
+    BIND_REMOTE_KEY,
+    CREATE_REMOTE_KEY,
+    FAN_PAIRING_DESCRIPTIONS,
     FILTER_RESET_KEY,
     HGI_BUTTON_DESCRIPTIONS,
     RamsesButtonBase,
     RamsesButtonEntityDescription,
+    RamsesFanPairingButton,
     _ButtonFactory,
     async_setup_entry,
 )
 from custom_components.ramses_cc.const import (
+    CONF_SCHEMA,
     DOMAIN,
+    SVC_ADD_FAKED_REM,
 )
 from custom_components.ramses_cc.helpers import normalize_device_id
 from custom_components.ramses_cc.schemas import (
+    SVC_BIND_DEVICE,
     SVC_FORCE_UPDATE,
     SVC_RESET_FILTER,
 )
@@ -563,7 +571,7 @@ async def test_fan_button_deduplicated(
 async def test_button_entities_routes_fan(
     mock_coordinator: MagicMock, mock_fan: MagicMock
 ) -> None:
-    """button_entities routes FAN devices to the filter-reset button."""
+    """button_entities routes FAN devices to the pairing and filter buttons."""
     # Arrange
     mock_fan._SLUG = "FAN"  # resolved by _patch_device_slug's fallback
     registry_entry = _registry_entity()
@@ -573,12 +581,13 @@ async def test_button_entities_routes_fan(
     with _patch_device_slug(), _patch_entity_registry([registry_entry]):
         buttons = factory.button_entities(mock_fan)
 
-    # Assert
-    assert len(buttons) == 1
-    assert (
-        buttons[0].unique_id
-        == f"{normalize_device_id(FAN_ID)}-{FILTER_RESET_KEY}"
-    )
+    # Assert: pairing buttons plus the filter reset
+    fan = normalize_device_id(FAN_ID)
+    assert [b.unique_id for b in buttons] == [
+        f"{fan}-{CREATE_REMOTE_KEY}",
+        f"{fan}-{BIND_REMOTE_KEY}",
+        f"{fan}-{FILTER_RESET_KEY}",
+    ]
 
 
 async def test_button_entities_ignores_unknown_slug(
@@ -801,3 +810,209 @@ async def test_extra_state_attributes_target_is_none_when_unset(
     # Assert
     assert "target" in attrs
     assert attrs["target"] is None
+
+
+# --- FAN pairing buttons (create_remote / bind_remote) ------------------------
+
+MELTEM_ID = "32:149304"
+
+
+def _pairing_button(
+    key: str,
+    bound_rem: str | None = None,
+    schema: dict[str, Any] | None = None,
+    rem_faked: bool | None = None,
+) -> tuple[RamsesFanPairingButton, MagicMock]:
+    """Return a pairing button for a mock FAN, and its service mock."""
+    fan = MagicMock(spec=HvacVentilator)
+    fan.id = MELTEM_ID
+    fan.get_bound_rem.return_value = bound_rem
+    strategy = MagicMock()
+    strategy.binding_codes.return_value = ("22F1", "22F3")
+    fan.get_configured_strategy.return_value = strategy
+
+    coordinator = MagicMock()
+    coordinator.options = {CONF_SCHEMA: schema or {}}
+    if rem_faked is None:
+        coordinator.get_device.return_value = None
+    else:
+        rem = MagicMock()
+        rem.is_faked = rem_faked
+        coordinator.get_device.return_value = rem
+
+    description = next(d for d in FAN_PAIRING_DESCRIPTIONS if d.key == key)
+    button = RamsesFanPairingButton(coordinator, fan, description)
+    button.hass = MagicMock()
+    button.hass.services.async_call = AsyncMock()
+    return button, button.hass.services.async_call
+
+
+async def test_pairing_buttons_created_for_fan(
+    mock_coordinator: MagicMock, mock_fan: MagicMock
+) -> None:
+    """Every FAN gets Create remote and Bind remote config buttons."""
+    # Arrange
+    factory = _ButtonFactory(mock_coordinator)
+
+    # Act
+    buttons = factory.pairing_buttons(mock_fan)
+    again = factory.pairing_buttons(mock_fan)
+
+    # Assert
+    assert [b.entity_description.key for b in buttons] == [
+        CREATE_REMOTE_KEY,
+        BIND_REMOTE_KEY,
+    ]
+    assert all(isinstance(b, RamsesFanPairingButton) for b in buttons)
+    assert again == []  # deduplicated
+
+
+async def test_pairing_buttons_skipped_for_non_fan(
+    mock_coordinator: MagicMock, mock_hgi: MagicMock
+) -> None:
+    """Non-FAN devices get no pairing buttons."""
+    # Arrange
+    factory = _ButtonFactory(mock_coordinator)
+
+    # Act / Assert
+    assert factory.pairing_buttons(mock_hgi) == []
+
+
+async def test_create_remote_adds_faked_rem() -> None:
+    """Create remote calls add_faked_rem with a 37: address and alias."""
+    # Arrange
+    button, call = _pairing_button(
+        CREATE_REMOTE_KEY,
+        schema={MELTEM_ID: {"_alias": "Lueftung Schlafzimmer"}},
+    )
+
+    # Act
+    await button.async_press()
+
+    # Assert
+    call.assert_awaited_once_with(
+        DOMAIN,
+        SVC_ADD_FAKED_REM,
+        service_data={
+            "device_id": "37:149304",
+            "bound_to": MELTEM_ID,
+            "alias": "Virtual REM Lueftung Schlafzimmer",
+        },
+        blocking=True,
+    )
+
+
+async def test_create_remote_refuses_when_fan_has_remote() -> None:
+    """Create remote does nothing if the FAN already has a remote."""
+    # Arrange
+    button, call = _pairing_button(CREATE_REMOTE_KEY, bound_rem="37:149304")
+
+    # Act / Assert
+    with pytest.raises(HomeAssistantError, match="already has a remote"):
+        await button.async_press()
+    call.assert_not_awaited()
+
+
+async def test_create_remote_refuses_used_address() -> None:
+    """Create remote refuses an address that's already in the schema."""
+    # Arrange
+    button, call = _pairing_button(
+        CREATE_REMOTE_KEY, schema={"37:149304": {"_class": "REM"}}
+    )
+
+    # Act / Assert
+    with pytest.raises(HomeAssistantError, match="already in use"):
+        await button.async_press()
+    call.assert_not_awaited()
+
+
+async def test_bind_remote_sends_strategy_offer() -> None:
+    """Bind remote binds the FAN's faked REM with the strategy's codes."""
+    # Arrange
+    button, call = _pairing_button(
+        BIND_REMOTE_KEY, bound_rem="37:149304", rem_faked=True
+    )
+
+    # Act
+    await button.async_press()
+
+    # Assert
+    call.assert_awaited_once_with(
+        DOMAIN,
+        SVC_BIND_DEVICE,
+        service_data={
+            "device_id": "37:149304",
+            "offer": {"22F1": "00", "22F3": "00"},
+        },
+        blocking=True,
+    )
+
+
+async def test_bind_remote_uses_schema_for_new_remote() -> None:
+    """A REM just created (only in the schema yet) can be bound."""
+    # Arrange
+    button, call = _pairing_button(
+        BIND_REMOTE_KEY,
+        schema={
+            MELTEM_ID: {"_bound": "37:149304"},
+            "37:149304": {"_class": "REM", "_faked": True},
+        },
+    )
+
+    # Act
+    await button.async_press()
+
+    # Assert
+    assert call.await_args.kwargs["service_data"]["device_id"] == "37:149304"
+
+
+async def test_bind_remote_without_remote_raises() -> None:
+    """Bind remote asks to create a remote first."""
+    # Arrange
+    button, call = _pairing_button(BIND_REMOTE_KEY)
+
+    # Act / Assert
+    with pytest.raises(HomeAssistantError, match="Create remote"):
+        await button.async_press()
+    call.assert_not_awaited()
+
+
+async def test_bind_remote_refuses_real_remote() -> None:
+    """A real (not faked) remote can't be bound from HA."""
+    # Arrange
+    button, call = _pairing_button(
+        BIND_REMOTE_KEY, bound_rem="37:149304", rem_faked=False
+    )
+
+    # Act / Assert
+    with pytest.raises(HomeAssistantError, match="real remote"):
+        await button.async_press()
+    call.assert_not_awaited()
+
+
+async def test_bind_remote_default_offer_without_strategy() -> None:
+    """Without a strategy the Orcon-style offer is used."""
+    # Arrange
+    button, call = _pairing_button(
+        BIND_REMOTE_KEY, bound_rem="37:149304", rem_faked=True
+    )
+    button._device.get_configured_strategy.return_value = None
+
+    # Act
+    await button.async_press()
+
+    # Assert
+    assert call.await_args.kwargs["service_data"]["offer"] == {
+        "22F1": "00",
+        "22F3": "00",
+    }
+
+
+async def test_pairing_button_available_while_fan_unheard() -> None:
+    """Pairing buttons stay available when the FAN isn't heard."""
+    # Arrange
+    button, _ = _pairing_button(CREATE_REMOTE_KEY)
+    button._device.is_available = False
+
+    # Act / Assert
+    assert button.available is True

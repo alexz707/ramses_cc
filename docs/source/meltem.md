@@ -25,6 +25,11 @@ remote**. Writes from the gateway's own `18:` address are silently ignored, so
 without a bound remote, fan modes and parameter changes have no effect. Reads
 (`RQ 2411`, `RQ 10D0`) work from the gateway.
 
+The FAN's device page has two buttons for this: **Create remote** (step 1,
+with the address `37:` plus the FAN's number, e.g. `37:149304` for
+`32:149304`) and **Bind remote** (step 3, with the offer of the FAN's
+strategy). Without the buttons, use the actions below.
+
 1. Create a faked remote bound to the FAN. This only changes the schema and
    sends nothing on air:
 
@@ -39,7 +44,8 @@ without a bound remote, fan modes and parameter changes have no effect. Reads
 2. Switch the unit off and on at the mains. For the first 5 minutes after
    power-on it accepts new remotes ("Verbindungsmodus").
 
-3. Within that window, bind the faked remote with an Orcon remote offer:
+3. Within that window, press **Bind remote**, or bind the faked remote with an
+   Orcon remote offer:
 
    ```yaml
    action: ramses_cc.bind_device
@@ -120,6 +126,22 @@ The current fan mode comes from the unit's status:
   aren't named, because the LOW/MEDIUM/HIGH airflows are set by Kennzahl
   13–15. ramses_rf labels level 3 `"speed 3, high"`, but on a Meltem unit
   that's 30 m³/h, the MEDIUM preset.
+
+## Hidden entities
+
+The unit's status lacks many of the values ramses_cc shows for other FANs.
+On a Meltem unit, ramses_cc hides these entities by default:
+
+- sensors without a value: air quality, CO2, indoor/outdoor temperature and
+  humidity, supply temperature, supply/exhaust flow, bypass mode, pre/post
+  heat, the 10D0 filter days, and the Orcon-decoded fan rate
+- binary sensors: bypass position, fault, filter dirty, frost cycle
+- 2411 parameters the unit doesn't answer (`3E`, `3F`, `75`, `88`, `95`,
+  `C8`, `CA`, `CB`, `CE`, `CF`, `DA`, `F5`, `F6`)
+
+They're hidden once, after the unit's model is known. An entity you unhide
+stays visible. The -F/-FC variants have humidity or CO2 sensors, so unhide
+those entities if they show values there.
 
 ## Setting the airflow
 

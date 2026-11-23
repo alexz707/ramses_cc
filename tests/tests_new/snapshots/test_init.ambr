@@ -2159,6 +2159,42 @@
     StateSnapshot({
       'attributes': ReadOnlyDict({
         'effective_polling_interval': dict({
+          '10D0': 86400,
+          '10E0': 600,
+        }),
+        <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'FAN 32:157747 Create remote',
+        <EntityStateAttribute.ICON: 'icon'>: 'mdi:remote',
+        'id': '32:157747',
+        'target': None,
+      }),
+      'context': <ANY>,
+      'entity_id': 'button.fan_32_157747_create_remote',
+      'last_changed': <ANY>,
+      'last_reported': <ANY>,
+      'last_updated': <ANY>,
+      'state': 'unknown',
+    }),
+    StateSnapshot({
+      'attributes': ReadOnlyDict({
+        'effective_polling_interval': dict({
+          '10D0': 86400,
+          '10E0': 600,
+        }),
+        <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'FAN 32:157747 Bind remote',
+        <EntityStateAttribute.ICON: 'icon'>: 'mdi:link-variant',
+        'id': '32:157747',
+        'target': None,
+      }),
+      'context': <ANY>,
+      'entity_id': 'button.fan_32_157747_bind_remote',
+      'last_changed': <ANY>,
+      'last_reported': <ANY>,
+      'last_updated': <ANY>,
+      'state': 'unknown',
+    }),
+    StateSnapshot({
+      'attributes': ReadOnlyDict({
+        'effective_polling_interval': dict({
         }),
         <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'HGI 18:006402 Force Update',
         <EntityStateAttribute.ICON: 'icon'>: 'mdi:refresh',

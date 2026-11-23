@@ -324,3 +324,56 @@ async def async_send_meltem_22f4(
     await gwy.async_send_raw_command(
         cmd, num_repeats=2, priority=Priority.HIGH
     )
+
+
+#: Entity description keys a Meltem M-WRG-S M never fills, hidden by
+#: default: 31DA fields it reports as "not available" (7FFF/EF), the
+#: Orcon 22F4 rate (decoded with the wrong map), the 10D0 days (not
+#: decodable, see filter_remaining_percent), 31DA flags, and the 2411
+#: parameters it doesn't answer.  The -F/-FC variants have humidity or
+#: CO2 sensors, so those entities may carry data there and can be
+#: unhidden.
+MELTEM_HIDDEN_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        # sensors
+        "air_quality",
+        "bypass_mode",
+        "co2_level",
+        "exhaust_flow",
+        "fan_rate",
+        "filter_remaining",
+        "indoor_humidity",
+        "indoor_temp",
+        "outdoor_humidity",
+        "outdoor_temp",
+        "post_heat",
+        "pre_heat",
+        "supply_flow",
+        "supply_temp",
+        "temperature",
+        # binary sensors
+        "bypass_position",
+        "has_fault",
+        "filter_dirty",
+        "frost_cycle",
+        # 2411 parameters without a reply
+        *(
+            f"param_{param_id}"
+            for param_id in (
+                "3E",
+                "3F",
+                "75",
+                "88",
+                "95",
+                "C8",
+                "CA",
+                "CB",
+                "CE",
+                "CF",
+                "DA",
+                "F5",
+                "F6",
+            )
+        ),
+    }
+)
