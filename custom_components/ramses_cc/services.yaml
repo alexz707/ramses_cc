@@ -215,6 +215,38 @@ reset_filter_counter:
 #
 # evohome controller service calls (CH/DHW)
 
+set_meltem_airflow:
+  # Set the supply/extract airflow of a Meltem M-WRG unit (W 22F4)
+
+  target:
+    entity:
+      - integration: ramses_cc
+        domain: climate
+        # The entity_id of a Meltem FAN with a bound, faked remote.
+
+  fields:
+    supply:
+      required: true
+      example: 10
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 10
+          unit_of_measurement: m³/h
+          mode: slider
+    extract:
+      required: false
+      example: 50
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 10
+          unit_of_measurement: m³/h
+          mode: slider
+
+
 get_system_faults:
   # Get the Fault log of a TCS (Controller)
 

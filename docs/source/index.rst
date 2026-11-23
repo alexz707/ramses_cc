@@ -20,6 +20,7 @@ ramses_cc
    usage
    glossary
    2411_params
+   meltem
 
 .. toctree::
    :maxdepth: 2

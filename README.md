@@ -17,7 +17,7 @@ The simplest way to know if it will work with your CH/DHW system is to identify 
  - **BDR91A** or **BDR91T**: Wireless Relay
  - **HC60NG**: Wireless Relay (older hardware version)
 
-**ramses_cc** also works with HVAC (ventilation) systems using the Ramses-II protocol, such as from **Itho**, **Orcon**, **Nuaire**, **Ventiline**, **Vasco**, etc.
+**ramses_cc** also works with HVAC (ventilation) systems using the Ramses-II protocol, such as from **Itho**, **Meltem**, **Orcon**, **Nuaire**, **Ventiline**, **Vasco**, etc.
 
 It uses the [ramses_rf](https://github.com/ramses-rf/ramses_rf) client library to decode the RAMSES-II protocol used by these devices. Note that other systems may also use this protocol. YMMV!
 
@@ -109,6 +109,7 @@ instance to get the full list plus an interactive UI.
 | `set_fan_param`          | Set a configuration parameter (2411) on a FAN                                                   | fan_device/fan_id, param_id, value, from_id |
 | `update_fan_params`      | Request all configuration parameters (2411) from a FAN                                           | fan_device/fan_id, from_id          |
 | `add_faked_rem`          | Create a faked REM (virtual remote) for sending commands to a FAN                                | device_id, bound_to, alias          |
+| `set_meltem_airflow`     | Set the supply/extract airflow of a Meltem M-WRG unit (see [docs](docs/source/meltem.md))       | supply, extract                     |
 | `send_command`           | Send a RAMSES command as if from a remote                                                        | command, num_repeats, delay_secs    |
 | `learn_command`          | Learn a RAMSES command and add it to the database                                                | command, timeout                    |
 | `add_command`            | Add a RAMSES command to the database until restart                                               | command, packet_string              |

@@ -572,6 +572,20 @@
                 }
             }
         },
+        "set_meltem_airflow": {
+            "name": "Meltem-luchtdebiet instellen",
+            "description": "Stelt het toevoer- en afvoerdebiet van een Meltem M-WRG-unit in, verzonden vanaf de gekoppelde, gesimuleerde afstandsbediening. Gelijke waarden geven een gebalanceerde stand, verschillende waarden een ongebalanceerd programma (bijv. alleen afvoer). De standenschakelaar en een herstart heffen dit op.",
+            "fields": {
+                "supply": {
+                    "name": "Toevoerdebiet",
+                    "description": "Toevoerdebiet in m³/h: 0, of 10 tot 100 in stappen van 10."
+                },
+                "extract": {
+                    "name": "Afvoerdebiet",
+                    "description": "Afvoerdebiet in m³/h: 0, of 10 tot 100 in stappen van 10. Standaard: gelijk aan toevoer."
+                }
+            }
+        },
         "get_system_faults": {
             "name": "Haal foutenlog van een TCS (Controller) op",
             "description": "Verzamelt het meest recente foutenlog van een Controller.",

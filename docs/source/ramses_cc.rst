@@ -76,6 +76,14 @@ ramses\_cc.helpers module
    :show-inheritance:
    :undoc-members:
 
+ramses\_cc.meltem module
+------------------------
+
+.. automodule:: ramses_cc.meltem
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
 ramses\_cc.mqtt\_bridge module
 ------------------------------
 

@@ -249,6 +249,10 @@ When found, the bound device id is stored in the device entity. (hvac)
 2. bound (if set)
 3. HGI
 
+Some FANs only accept writes from a bound remote and silently ignore
+`W 2411` from the HGI (e.g. Meltem M-WRG units, see [Meltem](meltem.md)).
+For those, bind a faked REM to the FAN first.
+
 ## Service Interfaces
 
 ### Get Fan Parameter

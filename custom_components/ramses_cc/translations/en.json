@@ -574,6 +574,20 @@
                 }
             }
         },
+        "set_meltem_airflow": {
+            "name": "Set Meltem airflow",
+            "description": "Sets the supply and extract airflow of a Meltem M-WRG unit, sent from its bound, faked remote. Equal values set a balanced level, different values an unbalanced program (e.g. extract-only ventilation). The level switch and a power cycle override it.",
+            "fields": {
+                "supply": {
+                    "name": "Supply airflow",
+                    "description": "Supply airflow in m³/h: 0, or 10 to 100 in steps of 10."
+                },
+                "extract": {
+                    "name": "Extract airflow",
+                    "description": "Extract airflow in m³/h: 0, or 10 to 100 in steps of 10. Default: same as supply."
+                }
+            }
+        },
         "get_system_faults": {
             "name": "Get the Fault log of a TCS (Controller)",
             "description": "Obtains the controller's latest fault log entries.",

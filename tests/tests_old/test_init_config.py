@@ -33,8 +33,8 @@ from ..virtual_rf import VirtualRf
 _CALL_LATER_DELAY: Final = 0  # from: custom_components.ramses_cc.services.py
 
 NUM_SVCS_AFTER = (
-    38  # proxy for success, platform services included since 0.51.8
-    # (+1 unbind_device, issue 1283)
+    39  # proxy for success, platform services included since 0.51.8
+    # (+1 unbind_device, issue 1283, +1 set_meltem_airflow)
 )
 # Passive scan services (registered when advanced_features.passive_scan
 # is enabled, e.g. after v2→v3 migration).  7 services:

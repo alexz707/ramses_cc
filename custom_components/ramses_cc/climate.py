@@ -86,6 +86,12 @@ from .helpers import (
     resolve_async_attr,
     resolve_demand_attr,
 )
+from .meltem import (
+    MELTEM_FAN_MODES,
+    airflow_payload,
+    is_meltem,
+    meltem_fan_mode,
+)
 from .remote import (
     _build_packet_from_template,
     _is_command_dict,
@@ -1407,6 +1413,14 @@ class RamsesHvac(RamsesEntity, ClimateEntity):
         :return: The fan mode.
         """
         fan_info = self._get_effective_fan_info()
+        if is_meltem(self._device):
+            # read hvac_state directly: the async getters may send an RQ
+            hvac_state = getattr(self._device, "hvac_state", None)
+            return meltem_fan_mode(
+                fan_info,
+                getattr(hvac_state, "supply_fan_speed", None),
+                getattr(hvac_state, "exhaust_fan_speed", None),
+            )
         return _normalise_fan_info_for_selector(
             fan_info, configured_hvac_strategy(self._device)
         )
@@ -1435,6 +1449,11 @@ class RamsesHvac(RamsesEntity, ClimateEntity):
 
         # Merge strategy-provided fan modes (canonical names + aliases)
         strategy = configured_hvac_strategy(self._device)
+        if is_meltem(self._device):
+            # Meltem units ignore the (Orcon fallback) strategy's 22F1
+            # modes; offer the W 22F4 modes instead.
+            base_modes = list(MELTEM_FAN_MODES)
+            strategy = None
         strategy_mode_names: set[str] = set()
         if strategy is not None:
             for mode_name in strategy.fan_modes.values():
@@ -1682,7 +1701,12 @@ class RamsesHvac(RamsesEntity, ClimateEntity):
                 # No optimistic update — see comment above (issue 1116).
                 return
 
-            # 2. Fallback to standard ramses_rf implementation
+            # 2. Meltem units take W 22F4 from the bound REM
+            if is_meltem(self._device) and fan_mode in MELTEM_FAN_MODES:
+                await self._async_send_meltem_22f4(MELTEM_FAN_MODES[fan_mode])
+                return
+
+            # 3. Fallback to standard ramses_rf implementation
             await self._device.set_fan_mode(fan_mode)
             # No optimistic update — see comment above (issue 1116).
 
@@ -1751,9 +1775,82 @@ class RamsesHvac(RamsesEntity, ClimateEntity):
 
         # Map the HA HVACMode to the corresponding HA Fan Mode string
         target_fan_mode = FAN_OFF if hvac_mode == HVACMode.OFF else FAN_AUTO
+        if target_fan_mode == FAN_AUTO and is_meltem(self._device):
+            # Meltem units have no auto mode without sensors: turn on
+            # at the LOW preset.
+            target_fan_mode = FAN_LOW
 
         # Delegate the actual hardware transmission to our robust fan mode
         await self.async_set_fan_mode(target_fan_mode)
+
+    async def async_set_meltem_airflow(
+        self, supply: int, extract: int | None = None
+    ) -> None:
+        """Set the supply and extract airflow of a Meltem unit.
+
+        Equal airflows set a balanced level, different airflows an
+        unbalanced program (e.g. supply 10 / extract 50 m³/h for
+        extract-only ventilation).  Like the Meltem remote's manual
+        mode, the setting is temporary: the unit's level switch and a
+        power cycle override it.
+
+        :param supply: The supply airflow (0 or 10-100 m³/h).
+        :type supply: int
+        :param extract: The extract airflow (default: same as supply).
+        :type extract: int | None
+        :raises ServiceValidationError: If the device is not a Meltem
+            unit or an airflow is invalid.
+        :raises HomeAssistantError: If the command cannot be sent.
+        """
+        if not is_meltem(self._device):
+            raise ServiceValidationError(
+                f"{self._device.id} is not a Meltem unit (10E0 model "
+                f"{getattr(self._device, 'model', None)!r})"
+            )
+        try:
+            payload = airflow_payload(supply, extract)
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+        await self._async_send_meltem_22f4(payload)
+
+    async def _async_send_meltem_22f4(self, payload: str) -> None:
+        """Send W 22F4 to a Meltem unit from its bound, faked REM."""
+        bound_rem = self._bound_rem or self._device.get_bound_rem()
+        rem_dev = (
+            self.coordinator.get_device(str(bound_rem)) if bound_rem else None
+        )
+        if rem_dev is None or not rem_dev.is_faked:
+            # The unit ignores W 22F4 from the HGI: without a bound,
+            # faked REM the command would be lost silently.
+            raise HomeAssistantError(
+                f"Meltem unit {self._device.id} needs a bound, faked "
+                "remote to accept commands (see add_faked_rem and "
+                "bind_device)"
+            )
+        packet_str = _build_packet_from_template(
+            {
+                "verb": "W",
+                "code": "22F4",
+                "payload": payload,
+                "src": str(bound_rem),
+            },
+            self._device,
+            self.coordinator,
+        )
+        _LOGGER.info("Sending Meltem command: %s", packet_str)
+        cmd = parse_packet_string(packet_str)
+        if cmd is None:
+            raise HomeAssistantError(f"Failed to parse packet: {packet_str}")
+        gwy = device_gateway(self._device)
+        if gwy is None:
+            raise HomeAssistantError(
+                f"Gateway unavailable for device {self._device.id}"
+            )
+        # W 22F4 is idempotent; repeats cover a frame lost on air.  No
+        # optimistic update: the unit confirms with 22F1/22F4/31DA.
+        await gwy.async_send_raw_command(
+            cmd, num_repeats=2, priority=Priority.HIGH
+        )
 
 
 @dataclass(frozen=True, kw_only=True)

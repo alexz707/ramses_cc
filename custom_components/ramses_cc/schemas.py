@@ -3922,6 +3922,18 @@ SCH_GET_SYSTEM_FAULTS = make_entity_service_schema(
     }
 )
 
+# Meltem M-WRG airflow (W 22F4), see meltem.py
+SVC_SET_MELTEM_AIRFLOW: Final = "set_meltem_airflow"
+_SCH_MELTEM_AIRFLOW = vol.All(
+    vol.Coerce(int), vol.In([0, *range(10, 101, 10)])
+)
+SCH_SET_MELTEM_AIRFLOW = make_entity_service_schema(
+    {
+        vol.Required("supply"): _SCH_MELTEM_AIRFLOW,
+        vol.Optional("extract"): _SCH_MELTEM_AIRFLOW,
+    }
+)
+
 # Service schema for fan parameters via ramses_rf
 SVC_GET_FAN_PARAM: Final = "get_fan_param"
 SVC_SET_FAN_PARAM: Final = "set_fan_param"
@@ -3990,6 +4002,7 @@ SVCS_RAMSES_CLIMATE = {
     SVC_GET_ZONE_SCHEDULE: SCH_NO_ENTITY_SVC_PARAMS,
     SVC_SET_ZONE_SCHEDULE: SCH_SET_ZONE_SCHEDULE,
     SVC_GET_SYSTEM_FAULTS: SCH_GET_SYSTEM_FAULTS,
+    SVC_SET_MELTEM_AIRFLOW: SCH_SET_MELTEM_AIRFLOW,
 }
 
 # services for water_heater platform
