@@ -1868,6 +1868,8 @@ CLIMATE_DESCRIPTIONS: tuple[RamsesClimateEntityDescription, ...] = (
     RamsesClimateEntityDescription(
         key="hvac",
         name=None,
+        # fan_mode names for the Meltem modes (boost, supply_only, ...)
+        translation_key="hvac",
         ramses_rf_class=HvacVentilator,
         ramses_cc_class=RamsesHvac,
     ),

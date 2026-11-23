@@ -15,7 +15,10 @@ from homeassistant.components.climate.const import (
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 
-from custom_components.ramses_cc.climate import RamsesHvac
+from custom_components.ramses_cc.climate import (
+    CLIMATE_DESCRIPTIONS,
+    RamsesHvac,
+)
 from custom_components.ramses_cc.entity import (
     RamsesEntity,
     RamsesEntityDescription,
@@ -27,6 +30,7 @@ from custom_components.ramses_cc.meltem import (
     fan_speed_airflow,
     is_meltem,
     meltem_fan_mode,
+    meltem_hides_key,
     meltem_is_off,
 )
 from custom_components.ramses_cc.remote import (
@@ -647,3 +651,32 @@ def test_used_or_non_meltem_entity_never_hidden() -> None:
     # Assert
     used_reg.async_update_entity.assert_not_called()
     other_reg.async_update_entity.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("key", "hidden"),
+    [
+        ("param_65", True),  # Kennzahl 101 under an Orcon name
+        ("param_CF", True),
+        ("fan_info", True),
+        ("fan_mode", True),
+        ("indoor_humidity", True),
+        ("polling_interval", False),
+        ("supply_fan_speed", False),
+        ("exhaust_temp", False),
+        ("remaining_mins", False),
+        (None, False),
+    ],
+)
+def test_meltem_hides_key(key: str | None, hidden: bool) -> None:
+    # Arrange / Act / Assert
+    assert meltem_hides_key(key) is hidden
+
+
+def test_hvac_description_has_fan_mode_translation_key() -> None:
+    # Arrange
+    description = next(d for d in CLIMATE_DESCRIPTIONS if d.key == "hvac")
+
+    # Act / Assert: translations name boost/supply_only/extract_only
+    assert description.translation_key == "hvac"
+    assert description.name is None  # still named after the device

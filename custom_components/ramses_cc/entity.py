@@ -24,7 +24,7 @@ from .helpers import (
     reset_async_attr_cooldown,
     resolve_async_attr,
 )
-from .meltem import MELTEM_HIDDEN_KEYS, is_meltem
+from .meltem import is_meltem, meltem_hides_key
 
 if TYPE_CHECKING:
     from homeassistant.helpers.device_registry import ChildDeviceInfo
@@ -256,7 +256,7 @@ class RamsesEntity(CoordinatorEntity):
 
     def _is_unused_meltem_entity(self) -> bool:
         """Return True if this entity has no data on a Meltem unit."""
-        return self._description_key() in MELTEM_HIDDEN_KEYS and is_meltem(
+        return meltem_hides_key(self._description_key()) and is_meltem(
             self._device
         )
 
@@ -275,7 +275,7 @@ class RamsesEntity(CoordinatorEntity):
         """
         if getattr(self, "_meltem_hide_checked", False):
             return
-        if self._description_key() not in MELTEM_HIDDEN_KEYS:
+        if not meltem_hides_key(self._description_key()):
             self._meltem_hide_checked = True
             return
         if not is_meltem(self._device):

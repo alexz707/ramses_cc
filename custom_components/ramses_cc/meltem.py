@@ -326,13 +326,13 @@ async def async_send_meltem_22f4(
     )
 
 
-#: Entity description keys a Meltem M-WRG-S M never fills, hidden by
-#: default: 31DA fields it reports as "not available" (7FFF/EF), the
-#: Orcon 22F4 rate (decoded with the wrong map), the 10D0 days (not
-#: decodable, see filter_remaining_percent), 31DA flags, and the 2411
-#: parameters it doesn't answer.  The -F/-FC variants have humidity or
-#: CO2 sensors, so those entities may carry data there and can be
-#: unhidden.
+#: Entity description keys hidden by default on a Meltem M-WRG-S M:
+#: 31DA fields it reports as "not available" (7FFF/EF), the Orcon 22F4
+#: rate (decoded with the wrong map), the 10D0 days (not decodable, see
+#: filter_remaining_percent), 31DA flags, and the raw fan_info/fan_mode
+#: decodes (the climate entity shows the mode).  The -F/-FC variants have
+#: humidity or CO2 sensors, so those entities may carry data there and
+#: can be unhidden.
 MELTEM_HIDDEN_KEYS: Final[frozenset[str]] = frozenset(
     {
         # sensors
@@ -340,6 +340,8 @@ MELTEM_HIDDEN_KEYS: Final[frozenset[str]] = frozenset(
         "bypass_mode",
         "co2_level",
         "exhaust_flow",
+        "fan_info",
+        "fan_mode",
         "fan_rate",
         "filter_remaining",
         "indoor_humidity",
@@ -356,24 +358,26 @@ MELTEM_HIDDEN_KEYS: Final[frozenset[str]] = frozenset(
         "has_fault",
         "filter_dirty",
         "frost_cycle",
-        # 2411 parameters without a reply
-        *(
-            f"param_{param_id}"
-            for param_id in (
-                "3E",
-                "3F",
-                "75",
-                "88",
-                "95",
-                "C8",
-                "CA",
-                "CB",
-                "CE",
-                "CF",
-                "DA",
-                "F5",
-                "F6",
-            )
-        ),
     }
 )
+
+#: 2411 parameter entities (``param_<ID>``) are all hidden on a Meltem
+#: unit: ramses_rf polls the Orcon parameter set and names it with Orcon
+#: names, but the IDs are Meltem Kennzahlen with other meanings (e.g.
+#: ``param_65`` "Supply temperature limit" is Kennzahl 101, the external
+#: switch mode), so changing one would write a different setting.
+_PARAM_KEY_PREFIX: Final = "param_"
+
+
+def meltem_hides_key(key: str | None) -> bool:
+    """Return True if an entity with this key is hidden on Meltem units.
+
+    :param key: The entity description key.
+    :type key: str | None
+    :returns: True for the keys in MELTEM_HIDDEN_KEYS and all 2411
+        parameter entities.
+    :rtype: bool
+    """
+    if not key:
+        return False
+    return key in MELTEM_HIDDEN_KEYS or key.startswith(_PARAM_KEY_PREFIX)

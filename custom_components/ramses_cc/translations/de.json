@@ -1,0 +1,25 @@
+{
+    "entity": {
+        "button": {
+            "create_remote": {
+                "name": "Fernbedienung anlegen"
+            },
+            "bind_remote": {
+                "name": "Fernbedienung koppeln"
+            }
+        },
+        "climate": {
+            "hvac": {
+                "state_attributes": {
+                    "fan_mode": {
+                        "state": {
+                            "boost": "Intensivlüftung",
+                            "supply_only": "Nur Zuluft",
+                            "extract_only": "Nur Abluft"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

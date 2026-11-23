@@ -136,8 +136,13 @@ On a Meltem unit, ramses_cc hides these entities by default:
   humidity, supply temperature, supply/exhaust flow, bypass mode, pre/post
   heat, the 10D0 filter days, and the Orcon-decoded fan rate
 - binary sensors: bypass position, fault, filter dirty, frost cycle
-- 2411 parameters the unit doesn't answer (`3E`, `3F`, `75`, `88`, `95`,
-  `C8`, `CA`, `CB`, `CE`, `CF`, `DA`, `F5`, `F6`)
+- the raw `fan_info` and `fan_mode` sensors (the climate entity shows the
+  mode)
+- all 2411 parameter entities. ramses_rf names them after the Orcon
+  parameter set, but on a Meltem unit the IDs are Kennzahlen with other
+  meanings (`param_65` "Supply temperature limit" is Kennzahl 101, the
+  external switch mode), so changing one would write a different setting.
+  Use `set_fan_param` with the Kennzahl table below instead.
 
 They're hidden once, after the unit's model is known. An entity you unhide
 stays visible. The -F/-FC variants have humidity or CO2 sensors, so unhide

@@ -878,6 +878,19 @@
         }
     },
     "entity": {
+        "climate": {
+            "hvac": {
+                "state_attributes": {
+                    "fan_mode": {
+                        "state": {
+                            "boost": "Intensive",
+                            "supply_only": "Supply only",
+                            "extract_only": "Extract only"
+                        }
+                    }
+                }
+            }
+        },
         "number": {
             "polling_interval": {
                 "name": "Polling Interval"

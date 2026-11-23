@@ -876,6 +876,19 @@
         }
     },
     "entity": {
+        "climate": {
+            "hvac": {
+                "state_attributes": {
+                    "fan_mode": {
+                        "state": {
+                            "boost": "Intensief",
+                            "supply_only": "Alleen toevoer",
+                            "extract_only": "Alleen afvoer"
+                        }
+                    }
+                }
+            }
+        },
         "number": {
             "polling_interval": {
                 "name": "Poll-interval"
