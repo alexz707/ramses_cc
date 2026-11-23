@@ -81,7 +81,13 @@ other airflows, use `set_meltem_airflow` (below) or override the mode in the
 FAN's `_commands`.
 
 The Orcon modes (`away`, `auto`, …) are not offered, because the unit ignores
-them. Setting the HVAC mode to *auto* (turning the entity on) selects `low`.
+them.
+
+The power buttons switch the unit off and on, and on selects `low`:
+
+- the climate entity's *Turn off* / *Turn on* (HVAC mode *off* / *auto*)
+- the FAN's remote entity on the device page (`remote.fan_…`). Its toggle
+  follows the unit's state. For other FANs this button still does nothing.
 
 Behaviour of the unit:
 
@@ -100,9 +106,12 @@ Commands in the FAN's own `_commands` take priority over these built-in modes,
 so a mode can be overridden with a `{verb, code, payload}` template. Templates
 are sent from the bound remote too.
 
-The current fan mode comes from the unit's `31DA` status:
+The current fan mode comes from the unit's status:
 
-- `off` and `boost` come from the fan level.
+- `off` comes from the unit's `22F4` status (mode 1, which ramses_rf decodes
+  as `paused`). The `31DA` fan level also reports off, but ramses_rf never
+  lets an "off" fan level replace an earlier value.
+- `boost` comes from the `31DA` fan level.
 - `supply_only` and `extract_only` come from the supply and exhaust fan
   speeds. On a Meltem unit, 100 % is 100 m³/h, so 50 % / 10 % is
   supply-only and 10 % / 50 % is extract-only. Other unbalanced airflows

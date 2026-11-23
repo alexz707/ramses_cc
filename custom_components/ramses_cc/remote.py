@@ -8,6 +8,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
+from homeassistant.components.climate.const import FAN_LOW, FAN_OFF
 from homeassistant.components.remote import (
     RemoteEntity,
     RemoteEntityDescription,
@@ -48,6 +49,12 @@ from .helpers import (
     parse_packet_string,
     strategy_boost_aliases,
     strategy_mode_aliases,
+)
+from .meltem import (
+    MELTEM_FAN_MODES,
+    async_send_meltem_22f4,
+    is_meltem,
+    meltem_is_off,
 )
 from .schemas import DEFAULT_NUM_REPEATS, DEFAULT_TIMEOUT
 from .typing import RamsesConfigEntry
@@ -320,6 +327,21 @@ class RamsesRemote(RamsesEntity, RemoteEntity):
                     merged = _merge_commands(raw_commands, rem_commands)
                     self._commands, meta = _split_commands(merged)
                     self._command_comment = meta.get("_comment")
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return True if the remote (or the Meltem unit) is on.
+
+        For a Meltem FAN the state follows the unit's 22F4 status, so the
+        device page's on/off toggle matches the unit.  Other remotes are
+        always on.
+
+        :return: The on state.
+        """
+        if is_meltem(self._device):
+            hvac_state = getattr(self._device, "hvac_state", None)
+            return not meltem_is_off(getattr(hvac_state, "fan_mode", None))
+        return self._attr_is_on
 
     @property
     def is_fan_entity(self) -> bool:
@@ -912,7 +934,12 @@ class RamsesRemote(RamsesEntity, RemoteEntity):
         :param kwargs: Additional arguments for the turn_off operation.
         """
         _LOGGER.debug("Turning off REM device %s", self._device.id)
-        pass
+        if is_meltem(self._device):
+            # Meltem FAN: the device page's off button switches the
+            # unit off.  Other devices keep the no-op behaviour.
+            await async_send_meltem_22f4(
+                self.coordinator, self._device, MELTEM_FAN_MODES[FAN_OFF]
+            )
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn on the remote device.
@@ -920,7 +947,12 @@ class RamsesRemote(RamsesEntity, RemoteEntity):
         :param kwargs: Additional arguments for the turn_on operation.
         """
         _LOGGER.debug("Turning on REM device %s", self._device.id)
-        pass
+        if is_meltem(self._device):
+            # Meltem FAN: turn on at the LOW preset, like the climate
+            # entity's turn_on.
+            await async_send_meltem_22f4(
+                self.coordinator, self._device, MELTEM_FAN_MODES[FAN_LOW]
+            )
 
 
 @dataclass(frozen=True, kw_only=True)

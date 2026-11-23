@@ -34,6 +34,7 @@ issue) and ``docs/source/usage.md``.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Final
 
 from homeassistant.components.climate.const import (
@@ -42,6 +43,13 @@ from homeassistant.components.climate.const import (
     FAN_MEDIUM,
     FAN_OFF,
 )
+from homeassistant.exceptions import HomeAssistantError
+
+from ramses_tx.const import Priority
+
+from .helpers import device_gateway, parse_packet_string
+
+_LOGGER = logging.getLogger(__name__)
 
 #: 10E0 model descriptions of Meltem M-WRG RF modules
 MELTEM_MODELS: Final[frozenset[str]] = frozenset({"VMD-22RES22"})
@@ -169,6 +177,28 @@ def airflow_payload(supply: int, extract: int | None = None) -> str:
     return _payload(_MODE_UNBALANCED, supply_code, extract_code)
 
 
+#: ramses_rf's 22F4 fan_mode for mode byte 0x20 (Meltem mode 1, "off")
+_22F4_MODE_OFF: Final = "paused"
+
+
+def meltem_is_off(fan_mode_22f4: Any) -> bool:
+    """Return True if the unit's 22F4 status says it is off.
+
+    In off mode the unit's 31DA reports fan_info ``00`` ("off"), but
+    ramses_rf never lets an "off" fan_info replace an earlier value (a
+    quirk for FANs that send it as a placeholder), so the 31DA state
+    stays at the last level.  The unit's own 22F4 echo, sent after every
+    change and every 10 minutes, carries the mode: ramses_rf decodes
+    mode byte ``0x20`` (mode 1, off) as fan_mode ``"paused"``.
+
+    :param fan_mode_22f4: The FAN's ``hvac_state.fan_mode``.
+    :type fan_mode_22f4: Any
+    :returns: True if the unit reports mode 1 (off).
+    :rtype: bool
+    """
+    return fan_mode_22f4 == _22F4_MODE_OFF
+
+
 def fan_speed_airflow(speed: Any) -> int | None:
     """Return the airflow in m³/h for a 31DA fan speed.
 
@@ -237,3 +267,60 @@ def meltem_fan_mode(
     if airflows in _UNBALANCED_FAN_MODES:
         return _UNBALANCED_FAN_MODES[airflows]
     return fan_info.split(", ", 1)[0]
+
+
+async def async_send_meltem_22f4(
+    coordinator: Any,
+    device: Any,
+    payload: str,
+    bound_rem: Any = None,
+) -> None:
+    """Send ``W 22F4`` to a Meltem unit from its bound, faked remote.
+
+    The unit ignores W 22F4 from the gateway's own ``18:`` address, so
+    without a bound, faked remote the command would be lost silently.
+    The frame is sent with 2 repeats (W 22F4 is idempotent, and a frame
+    was occasionally lost on air).  There is no optimistic update: the
+    unit confirms with 22F1/22F4/31DA.
+
+    :param coordinator: The RamsesCoordinator.
+    :type coordinator: Any
+    :param device: The Meltem FAN (ramses_rf ``HvacVentilator``).
+    :type device: Any
+    :param payload: The W 22F4 payload hex string.
+    :type payload: str
+    :param bound_rem: The bound remote's ID (default: from the FAN).
+    :type bound_rem: Any
+    :raises HomeAssistantError: If there is no bound, faked remote, the
+        packet can't be built, or the gateway is unavailable.
+    """
+    # deferred: remote.py imports this module
+    from .remote import _build_packet_from_template
+
+    bound_rem = bound_rem or device.get_bound_rem()
+    rem_dev = coordinator.get_device(str(bound_rem)) if bound_rem else None
+    if rem_dev is None or not rem_dev.is_faked:
+        raise HomeAssistantError(
+            f"Meltem unit {device.id} needs a bound, faked remote to "
+            "accept commands (see add_faked_rem and bind_device)"
+        )
+    packet_str = _build_packet_from_template(
+        {
+            "verb": "W",
+            "code": "22F4",
+            "payload": payload,
+            "src": str(bound_rem),
+        },
+        device,
+        coordinator,
+    )
+    _LOGGER.info("Sending Meltem command: %s", packet_str)
+    cmd = parse_packet_string(packet_str)
+    if cmd is None:
+        raise HomeAssistantError(f"Failed to parse packet: {packet_str}")
+    gwy = device_gateway(device)
+    if gwy is None:
+        raise HomeAssistantError(f"Gateway unavailable for device {device.id}")
+    await gwy.async_send_raw_command(
+        cmd, num_repeats=2, priority=Priority.HIGH
+    )

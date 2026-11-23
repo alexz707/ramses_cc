@@ -89,8 +89,10 @@ from .helpers import (
 from .meltem import (
     MELTEM_FAN_MODES,
     airflow_payload,
+    async_send_meltem_22f4,
     is_meltem,
     meltem_fan_mode,
+    meltem_is_off,
 )
 from .remote import (
     _build_packet_from_template,
@@ -1302,8 +1304,13 @@ class RamsesHvac(RamsesEntity, ClimateEntity):
     ]
     _attr_precision: float = PRECISION_TENTHS
     _attr_preset_modes: list[str] | None = None
+    # TURN_ON/TURN_OFF: without them HA rejects climate.turn_on/turn_off
+    # (the more-info power button) although OFF is an hvac_mode.  HA's
+    # default handlers call async_set_hvac_mode(OFF / AUTO).
     _attr_supported_features: ClimateEntityFeature = (
         ClimateEntityFeature.FAN_MODE
+        | ClimateEntityFeature.TURN_ON
+        | ClimateEntityFeature.TURN_OFF
     )
     _attr_temperature_unit: str = UnitOfTemperature.CELSIUS
     # deprecated name kept as an alias for HA < 2026.11 (issue 1394)
@@ -1393,6 +1400,14 @@ class RamsesHvac(RamsesEntity, ClimateEntity):
 
     def _get_effective_fan_info(self) -> str | None:
         """Return fan_info if known, falling back to fan_mode for 31D9-only fans."""
+        if is_meltem(self._device) and meltem_is_off(
+            getattr(
+                getattr(self._device, "hvac_state", None), "fan_mode", None
+            )
+        ):
+            # ramses_rf keeps the previous 31DA fan_info when a FAN
+            # reports "off", so use the unit's 22F4 echo instead.
+            return FAN_OFF
         fan_info = self._get_cached_fan_info()
         if fan_info is not None:
             return fan_info
@@ -1815,41 +1830,11 @@ class RamsesHvac(RamsesEntity, ClimateEntity):
 
     async def _async_send_meltem_22f4(self, payload: str) -> None:
         """Send W 22F4 to a Meltem unit from its bound, faked REM."""
-        bound_rem = self._bound_rem or self._device.get_bound_rem()
-        rem_dev = (
-            self.coordinator.get_device(str(bound_rem)) if bound_rem else None
-        )
-        if rem_dev is None or not rem_dev.is_faked:
-            # The unit ignores W 22F4 from the HGI: without a bound,
-            # faked REM the command would be lost silently.
-            raise HomeAssistantError(
-                f"Meltem unit {self._device.id} needs a bound, faked "
-                "remote to accept commands (see add_faked_rem and "
-                "bind_device)"
-            )
-        packet_str = _build_packet_from_template(
-            {
-                "verb": "W",
-                "code": "22F4",
-                "payload": payload,
-                "src": str(bound_rem),
-            },
-            self._device,
+        await async_send_meltem_22f4(
             self.coordinator,
-        )
-        _LOGGER.info("Sending Meltem command: %s", packet_str)
-        cmd = parse_packet_string(packet_str)
-        if cmd is None:
-            raise HomeAssistantError(f"Failed to parse packet: {packet_str}")
-        gwy = device_gateway(self._device)
-        if gwy is None:
-            raise HomeAssistantError(
-                f"Gateway unavailable for device {self._device.id}"
-            )
-        # W 22F4 is idempotent; repeats cover a frame lost on air.  No
-        # optimistic update: the unit confirms with 22F1/22F4/31DA.
-        await gwy.async_send_raw_command(
-            cmd, num_repeats=2, priority=Priority.HIGH
+            self._device,
+            payload,
+            self._bound_rem or self._device.get_bound_rem(),
         )
 
 

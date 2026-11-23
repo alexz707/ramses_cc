@@ -8,7 +8,10 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from homeassistant.components.climate.const import HVACMode
+from homeassistant.components.climate.const import (
+    ClimateEntityFeature,
+    HVACMode,
+)
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from custom_components.ramses_cc.climate import RamsesHvac
@@ -19,6 +22,11 @@ from custom_components.ramses_cc.meltem import (
     fan_speed_airflow,
     is_meltem,
     meltem_fan_mode,
+    meltem_is_off,
+)
+from custom_components.ramses_cc.remote import (
+    RamsesRemote,
+    RamsesRemoteEntityDescription,
 )
 from custom_components.ramses_cc.schemas import SCH_SET_MELTEM_AIRFLOW
 from ramses_rf.devices import HvacVentilator
@@ -172,7 +180,7 @@ def _meltem_hvac(
     device.get_configured_strategy = MagicMock(return_value=OrconStrategy())
     device.set_fan_mode = AsyncMock()
     device.hvac_state = MagicMock(
-        supply_fan_speed=None, exhaust_fan_speed=None
+        supply_fan_speed=None, exhaust_fan_speed=None, fan_mode=None
     )
     gateway = MagicMock()
     gateway.async_send_raw_command = AsyncMock()
@@ -322,6 +330,40 @@ async def test_set_hvac_mode_off_meltem_sets_off() -> None:
     assert "00200000000000000000200000" in _sent_packet(gateway)
 
 
+def test_hvac_supports_turn_on_and_off() -> None:
+    # Arrange
+    hvac, _, _ = _meltem_hvac()
+
+    # Act
+    features = hvac.supported_features
+
+    # Assert: needed for climate.turn_on / turn_off (power button)
+    assert features & ClimateEntityFeature.TURN_OFF
+    assert features & ClimateEntityFeature.TURN_ON
+
+
+async def test_turn_off_meltem_sends_off() -> None:
+    # Arrange
+    hvac, _, gateway = _meltem_hvac()
+
+    # Act
+    await hvac.async_turn_off()
+
+    # Assert
+    assert "00200000000000000000200000" in _sent_packet(gateway)
+
+
+async def test_turn_on_meltem_sends_low() -> None:
+    # Arrange
+    hvac, _, gateway = _meltem_hvac()
+
+    # Act
+    await hvac.async_turn_on()
+
+    # Assert
+    assert "0060E400000000000000200000" in _sent_packet(gateway)
+
+
 async def test_set_meltem_airflow_sends_unbalanced() -> None:
     # Arrange
     hvac, _, gateway = _meltem_hvac()
@@ -385,3 +427,103 @@ def test_fan_mode_meltem_extract_only_from_hvac_state() -> None:
 
     # Act / Assert
     assert hvac.fan_mode == "extract_only"
+
+
+def test_meltem_is_off() -> None:
+    # Arrange / Act / Assert: 22F4 mode byte 0x20 decodes as "paused"
+    assert meltem_is_off("paused") is True
+    assert meltem_is_off("manual") is False
+    assert meltem_is_off(None) is False
+
+
+def test_meltem_off_from_22f4_overrides_stale_fan_info() -> None:
+    # Arrange: ramses_rf kept "speed 1, low" after the unit's 31DA "off"
+    hvac, device, _ = _meltem_hvac()
+    hvac._get_cached_fan_info = MagicMock(  # type: ignore[method-assign]
+        return_value="speed 1, low"
+    )
+    device.hvac_state.fan_mode = "paused"
+
+    # Act / Assert
+    assert hvac.fan_mode == "off"
+    assert hvac.hvac_mode == HVACMode.OFF
+
+
+def test_meltem_on_ignores_22f4_when_not_paused() -> None:
+    # Arrange
+    hvac, device, _ = _meltem_hvac()
+    hvac._get_cached_fan_info = MagicMock(  # type: ignore[method-assign]
+        return_value="speed 1, low"
+    )
+    device.hvac_state.fan_mode = "manual"
+
+    # Act / Assert
+    assert hvac.fan_mode == "speed 1"
+    assert hvac.hvac_mode == HVACMode.AUTO
+
+
+def _meltem_remote(
+    model: str | None = "VMD-22RES22",
+) -> tuple[RamsesRemote, MagicMock, MagicMock]:
+    """Return the FAN's RamsesRemote for a mock Meltem FAN."""
+    hvac, device, gateway = _meltem_hvac(model=model)
+    remote = RamsesRemote(
+        hvac.coordinator, device, RamsesRemoteEntityDescription(key="remote")
+    )
+    return remote, device, gateway
+
+
+async def test_remote_turn_off_meltem_sends_off() -> None:
+    # Arrange
+    remote, _, gateway = _meltem_remote()
+
+    # Act
+    await remote.async_turn_off()
+
+    # Assert: sent from the bound REM, like the climate entity
+    packet = _sent_packet(gateway)
+    assert REM_ID in packet
+    assert "00200000000000000000200000" in packet
+
+
+async def test_remote_turn_on_meltem_sends_low() -> None:
+    # Arrange
+    remote, _, gateway = _meltem_remote()
+
+    # Act
+    await remote.async_turn_on()
+
+    # Assert
+    assert "0060E400000000000000200000" in _sent_packet(gateway)
+
+
+async def test_remote_turn_off_non_meltem_sends_nothing() -> None:
+    # Arrange
+    remote, _, gateway = _meltem_remote(model="VMD-15RMS86")
+
+    # Act
+    await remote.async_turn_off()
+    await remote.async_turn_on()
+
+    # Assert: unchanged no-op for other FANs
+    gateway.async_send_raw_command.assert_not_called()
+
+
+def test_remote_is_on_follows_meltem_state() -> None:
+    # Arrange
+    remote, device, _ = _meltem_remote()
+
+    # Act / Assert
+    device.hvac_state.fan_mode = "paused"
+    assert remote.is_on is False
+    device.hvac_state.fan_mode = "manual"
+    assert remote.is_on is True
+
+
+def test_remote_is_on_non_meltem_always_on() -> None:
+    # Arrange
+    remote, device, _ = _meltem_remote(model="VMD-15RMS86")
+    device.hvac_state.fan_mode = "paused"
+
+    # Act / Assert
+    assert remote.is_on is True
