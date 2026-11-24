@@ -37,6 +37,7 @@ from homeassistant.helpers import (
     entity_platform,
     entity_registry as er,
 )
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.entity_platform import (
     AddEntitiesCallback,
     EntityPlatform,
@@ -49,6 +50,7 @@ from ramses_rf.entity import Entity as RamsesRFEntity
 from .const import (
     CONF_SCHEMA,
     DOMAIN,
+    SIGNAL_NEW_DEVICES,
     SVC_ADD_FAKED_REM,
     SVC_DISCOVER_KNOWN_DEVICES,
     SZ_TR_ALIAS,
@@ -251,6 +253,7 @@ class RamsesFanPairingButton(RamsesButtonBase):
             },
             blocking=True,
         )
+        await self._async_apply_binding()
 
     async def _async_bind_remote(self) -> None:
         """Send the binding offer from the FAN's faked REM."""
@@ -281,6 +284,26 @@ class RamsesFanPairingButton(RamsesButtonBase):
             SVC_BIND_DEVICE,
             service_data={"device_id": rem_id, "offer": offer},
             blocking=True,
+        )
+        await self._async_apply_binding()
+
+    async def _async_apply_binding(self) -> None:
+        """Make the FAN use its new remote without a reload.
+
+        ``add_faked_rem`` only writes the schema, and ramses_rf binds a
+        FAN to its REM when the FAN is set up, so the FAN would only use
+        the new remote after a reload of the integration.  Re-run that
+        setup for this FAN, then re-announce the FAN to the button
+        platform so its Reset filter counter button is created once the
+        remote is faked (after Bind remote).
+        """
+        if not isinstance(self._device, HvacVentilator):
+            return
+        await self.coordinator.fan_handler.setup_fan_bound_devices(
+            self._device
+        )
+        async_dispatcher_send(
+            self.hass, SIGNAL_NEW_DEVICES.format("button"), [self._device]
         )
 
 

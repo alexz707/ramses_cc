@@ -174,6 +174,11 @@ FAN isn't a Meltem unit, or if it has no bound, faked remote.
 
 ## Parameters (2411)
 
+ramses_cc doesn't poll the 2411 parameter set on Meltem units: that set is the
+Orcon one, which the unit answers with other settings or not at all (see
+*Hidden entities*). Read or change Meltem settings on demand with
+`get_fan_param` and `set_fan_param`.
+
 A 2411 parameter ID is the Meltem "Kennzahl" (decimal) from the M-WRG-FBH
 remote manual, written in hex. Changes are acknowledged with `I 2411` and stored
 permanently. Writes need the bound remote (see above): `set_fan_param` picks the

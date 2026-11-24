@@ -814,6 +814,16 @@ async def test_extra_state_attributes_target_is_none_when_unset(
 
 # --- FAN pairing buttons (create_remote / bind_remote) ------------------------
 
+
+@pytest.fixture(autouse=True)
+def mock_dispatcher_send() -> Any:
+    """Patch the new-device signal sent after Create/Bind remote."""
+    with patch(
+        "custom_components.ramses_cc.button.async_dispatcher_send"
+    ) as send:
+        yield send
+
+
 MELTEM_ID = "32:149304"
 
 
@@ -833,6 +843,7 @@ def _pairing_button(
 
     coordinator = MagicMock()
     coordinator.options = {CONF_SCHEMA: schema or {}}
+    coordinator.fan_handler.setup_fan_bound_devices = AsyncMock()
     if rem_faked is None:
         coordinator.get_device.return_value = None
     else:
@@ -1016,3 +1027,55 @@ async def test_pairing_button_available_while_fan_unheard() -> None:
 
     # Act / Assert
     assert button.available is True
+
+
+async def test_create_remote_applies_binding_without_reload(
+    mock_dispatcher_send: MagicMock,
+) -> None:
+    """After Create remote the FAN is bound to its REM at once."""
+    # Arrange
+    button, _ = _pairing_button(CREATE_REMOTE_KEY)
+
+    # Act
+    await button.async_press()
+
+    # Assert: FAN binding re-run, FAN re-announced to the button platform
+    button.coordinator.fan_handler.setup_fan_bound_devices.assert_awaited_once_with(
+        button._device
+    )
+    mock_dispatcher_send.assert_called_once_with(
+        button.hass, "ramses_cc_new_devices_button", [button._device]
+    )
+
+
+async def test_bind_remote_applies_binding_without_reload(
+    mock_dispatcher_send: MagicMock,
+) -> None:
+    """After Bind remote the filter-reset button can be created."""
+    # Arrange
+    button, _ = _pairing_button(
+        BIND_REMOTE_KEY, bound_rem="37:149304", rem_faked=True
+    )
+
+    # Act
+    await button.async_press()
+
+    # Assert
+    button.coordinator.fan_handler.setup_fan_bound_devices.assert_awaited_once()
+    mock_dispatcher_send.assert_called_once()
+
+
+async def test_failed_create_does_not_apply_binding(
+    mock_dispatcher_send: MagicMock,
+) -> None:
+    """A refused Create remote changes nothing."""
+    # Arrange
+    button, _ = _pairing_button(CREATE_REMOTE_KEY, bound_rem="37:149304")
+
+    # Act
+    with pytest.raises(HomeAssistantError):
+        await button.async_press()
+
+    # Assert
+    button.coordinator.fan_handler.setup_fan_bound_devices.assert_not_awaited()
+    mock_dispatcher_send.assert_not_called()

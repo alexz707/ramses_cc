@@ -1115,3 +1115,114 @@ async def test_fan_handler_listener_exception_resilience(
     assert (
         "Error executing parameter update callback for device" in caplog.text
     )
+
+
+# --- Meltem: no automatic 2411 parameter polling -----------------------------
+
+
+async def test_meltem_first_message_skips_param_sweep(
+    mock_coordinator: RamsesCoordinator, mock_fan_device: MagicMock
+) -> None:
+    """A Meltem unit gets no 2411 sweep on its first message."""
+    # Arrange
+    mock_fan_device.model = "VMD-22RES22"
+    mock_fan_device.set_initialized_callback = MagicMock()
+    cancel_callbacks: list[Callable[[], None]] = []
+    mock_coordinator.entry.async_on_unload = lambda cb: (
+        cancel_callbacks.append(cb)
+    )
+    await mock_coordinator.fan_handler.async_setup_fan_device(mock_fan_device)
+    init_lambda = mock_fan_device.set_initialized_callback.call_args[0][0]
+
+    # Act
+    with (
+        patch.object(
+            mock_coordinator, "get_all_fan_params"
+        ) as mock_get_params,
+        patch("custom_components.ramses_cc.number.create_parameter_entities"),
+    ):
+        await init_lambda()
+
+    # Assert
+    mock_get_params.assert_not_called()
+    for cancel_cb in cancel_callbacks:
+        cancel_cb()
+
+
+async def test_meltem_fallback_skips_param_sweep(
+    mock_coordinator: RamsesCoordinator, mock_fan_device: MagicMock
+) -> None:
+    """The immediate (no-callback) sweep is skipped for Meltem units too."""
+    # Arrange
+    mock_fan_device.model = "VMD-22RES22"
+    del mock_fan_device.set_initialized_callback
+    cancel_callbacks: list[Callable[[], None]] = []
+    mock_coordinator.entry.async_on_unload = lambda cb: (
+        cancel_callbacks.append(cb)
+    )
+
+    # Act
+    with (
+        patch("custom_components.ramses_cc.number.create_parameter_entities"),
+        patch.object(
+            mock_coordinator, "get_all_fan_params"
+        ) as mock_get_params,
+    ):
+        await mock_coordinator.fan_handler.async_setup_fan_device(
+            mock_fan_device
+        )
+
+    # Assert
+    mock_get_params.assert_not_called()
+    for cancel_cb in cancel_callbacks:
+        cancel_cb()
+
+
+async def test_meltem_periodic_poll_skipped(
+    mock_coordinator: RamsesCoordinator, mock_fan_device: MagicMock
+) -> None:
+    """The 6-hourly poll does nothing once the unit is known as Meltem."""
+    # Arrange: model not known when polling starts, known at poll time
+    mock_fan_device.model = None
+    cancel_callbacks: list[Callable[[], None]] = []
+    mock_coordinator.entry.async_on_unload = lambda cb: (
+        cancel_callbacks.append(cb)
+    )
+    with patch(
+        "custom_components.ramses_cc.fan_handler.async_track_time_interval"
+    ) as mock_track:
+        mock_coordinator.fan_handler._start_param_polling(mock_fan_device)
+    poll = mock_track.call_args[0][1]
+    mock_fan_device.model = "VMD-22RES22"
+
+    # Act
+    with patch.object(
+        mock_coordinator, "get_all_fan_params"
+    ) as mock_get_params:
+        await poll(None)
+
+    # Assert
+    mock_get_params.assert_not_called()
+
+
+async def test_non_meltem_periodic_poll_runs(
+    mock_coordinator: RamsesCoordinator, mock_fan_device: MagicMock
+) -> None:
+    """Other FANs keep their 6-hourly 2411 poll."""
+    # Arrange
+    mock_fan_device.model = "VMD-15RMS86"
+    mock_coordinator.entry.async_on_unload = MagicMock()
+    with patch(
+        "custom_components.ramses_cc.fan_handler.async_track_time_interval"
+    ) as mock_track:
+        mock_coordinator.fan_handler._start_param_polling(mock_fan_device)
+    poll = mock_track.call_args[0][1]
+
+    # Act
+    with patch.object(
+        mock_coordinator, "get_all_fan_params"
+    ) as mock_get_params:
+        await poll(None)
+
+    # Assert
+    mock_get_params.assert_called_once_with({"device_id": FAN_ID})

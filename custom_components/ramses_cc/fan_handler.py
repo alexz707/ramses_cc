@@ -27,6 +27,7 @@ from .const import (
     SZ_TR_BOUND,
 )
 from .helpers import device_slug
+from .meltem import is_meltem
 
 if TYPE_CHECKING:
     from .coordinator import RamsesCoordinator
@@ -347,7 +348,9 @@ class RamsesFanHandler:
                     self.create_parameter_entities(device)
 
                     # Request all parameters if probe succeeded
-                    if getattr(device, "supports_2411", False):
+                    if getattr(
+                        device, "supports_2411", False
+                    ) and not self._skip_param_polling(device):
                         _call: dict[str, DeviceIdT] = {
                             "device_id": device.id,
                         }
@@ -421,7 +424,9 @@ class RamsesFanHandler:
             # When the callback exists, param requests are deferred to
             # on_fan_first_message to avoid timeouts before the device is
             # online.
-            if not hasattr(device, "set_initialized_callback"):
+            if not hasattr(
+                device, "set_initialized_callback"
+            ) and not self._skip_param_polling(device):
                 call: dict[str, Any] = {
                     "device_id": device.id,
                 }
@@ -438,6 +443,26 @@ class RamsesFanHandler:
                 # Start periodic polling for devices without initialized
                 # callback too
                 self._start_param_polling(device)
+
+    @staticmethod
+    def _skip_param_polling(device: RamsesRFEntity) -> bool:
+        """Return True if the 2411 parameter set shouldn't be polled.
+
+        ramses_rf polls the Orcon parameter set.  A Meltem unit answers
+        those IDs with its own Kennzahlen (other meanings, entities
+        hidden) or not at all, and each unanswered ID is retried, so a
+        sweep costs a lot of airtime for nothing.  The Meltem settings
+        can still be read and written with get_fan_param/set_fan_param.
+
+        :param device: The FAN device.
+        :return: True for Meltem units.
+        """
+        if is_meltem(device):
+            _LOGGER.debug(
+                "Skipping 2411 parameter polling for Meltem unit %s", device.id
+            )
+            return True
+        return False
 
     def _start_param_polling(self, device: RamsesRFEntity) -> None:
         """Start periodic 2411 parameter polling for a FAN device.
@@ -460,6 +485,8 @@ class RamsesFanHandler:
 
         async def _poll_params(_: Any) -> None:
             """Request all 2411 parameters from the device."""
+            if self._skip_param_polling(device):
+                return
             _LOGGER.debug("Periodic 2411 poll for %s", dev_id)
             call: dict[str, Any] = {"device_id": dev_id}
             try:
