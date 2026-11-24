@@ -201,7 +201,7 @@ Verified over RF:
 | `2E` / `2F` | 46 / 47 | Extract / supply in extract-only mode (m³/h) | 0–100, 10 |
 | `39` | 57 | Continuous ventilation level (m³/h) | 0–100, 10 |
 | `53` | 83 | Unit operating hours | read-only |
-| `54` | 84 | Fan motor operating hours | read-only |
+| `54` | 84 | Fan motors operating hours (both motors) | read-only |
 | `65` | 101 | External switch mode (0 off, 1 airflow, 2 mode) | 0–3, 1 |
 
 Notes:
@@ -222,6 +222,19 @@ The *Reset filter counter* button (`W 10D0 00FF`) works once a remote is bound.
 ramses_rf currently doesn't decode the Meltem filter days, because the unit
 sends only the low byte of the days remaining and of the interval (about one
 year).
+
+## With ramses_rf's Meltem strategy
+
+ramses_rf releases after 0.61.4 recognise Meltem units by their model and
+decode them properly. ramses_cc then:
+
+- shows the unit's own mode (`fan_mode` sensor: `off`, `low`, …,
+  `supply_only`, `extract_only`, `boost`) and airflow (`fan_rate` sensor), and
+  the filter days remaining;
+- creates the parameter entities from the Meltem set (Kennzahlen with correct
+  names, e.g. "LOW (level I) airflow (m³/h)") and polls that set. Kennzahl 93
+  (factory reset) is never written;
+- unhides the entities it had hidden only because they had no value.
 
 ## Not supported yet (ramses_rf)
 

@@ -93,6 +93,7 @@ from .meltem import (
     is_meltem,
     meltem_fan_mode,
     meltem_is_off,
+    rf_decodes_meltem,
 )
 from .remote import (
     _build_packet_from_template,
@@ -1431,6 +1432,11 @@ class RamsesHvac(RamsesEntity, ClimateEntity):
         if is_meltem(self._device):
             # read hvac_state directly: the async getters may send an RQ
             hvac_state = getattr(self._device, "hvac_state", None)
+            # ramses_rf's Meltem strategy decodes the unit's 22F4 mode;
+            # free airflows ("manual") still fall back to the 31DA level
+            rf_mode = getattr(hvac_state, "fan_mode", None)
+            if rf_decodes_meltem(self._device) and rf_mode in MELTEM_FAN_MODES:
+                return str(rf_mode)
             return meltem_fan_mode(
                 fan_info,
                 getattr(hvac_state, "supply_fan_speed", None),

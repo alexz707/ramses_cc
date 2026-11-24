@@ -1226,3 +1226,30 @@ async def test_non_meltem_periodic_poll_runs(
 
     # Assert
     mock_get_params.assert_called_once_with({"device_id": FAN_ID})
+
+
+async def test_meltem_polled_when_rf_decodes_meltem(
+    mock_coordinator: RamsesCoordinator, mock_fan_device: MagicMock
+) -> None:
+    """With ramses_rf's Meltem strategy the (Meltem) set is polled."""
+    # Arrange
+    mock_fan_device.model = "VMD-22RES22"
+    mock_coordinator.entry.async_on_unload = MagicMock()
+    with patch(
+        "custom_components.ramses_cc.fan_handler.rf_decodes_meltem",
+        return_value=True,
+    ):
+        with patch(
+            "custom_components.ramses_cc.fan_handler.async_track_time_interval"
+        ) as mock_track:
+            mock_coordinator.fan_handler._start_param_polling(mock_fan_device)
+        poll = mock_track.call_args[0][1]
+
+        # Act
+        with patch.object(
+            mock_coordinator, "get_all_fan_params"
+        ) as mock_get_params:
+            await poll(None)
+
+    # Assert
+    mock_get_params.assert_called_once_with({"device_id": FAN_ID})

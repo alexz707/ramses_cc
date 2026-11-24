@@ -388,6 +388,27 @@ async def test_init_generic_percentage(
     assert entity_perc._attr_native_max_value == 100
 
 
+async def test_init_integer_percentage_not_scaled(
+    mock_coordinator: MagicMock, mock_fan_device: MagicMock
+) -> None:
+    """A % parameter with data type 00 is an integer, not a 0-1 fraction.
+
+    E.g. Meltem Kennzahl 36 (humidity control start, 40-80 %).
+    """
+    desc = RamsesNumberEntityDescription(
+        key="param_24",
+        ramses_rf_attr="24",
+        unit_of_measurement="%",
+        min_value=40,
+        max_value=80,
+        data_type="00",
+    )
+    entity = RamsesNumberParam(mock_coordinator, mock_fan_device, desc)
+    assert entity._is_percentage is False
+    assert entity._attr_native_min_value == 40
+    assert entity._attr_native_max_value == 80
+
+
 async def test_init_parameter_52(
     mock_coordinator: MagicMock, mock_fan_device: MagicMock
 ) -> None:

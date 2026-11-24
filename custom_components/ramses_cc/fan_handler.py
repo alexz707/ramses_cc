@@ -27,7 +27,7 @@ from .const import (
     SZ_TR_BOUND,
 )
 from .helpers import device_slug
-from .meltem import is_meltem
+from .meltem import is_meltem, rf_decodes_meltem
 
 if TYPE_CHECKING:
     from .coordinator import RamsesCoordinator
@@ -448,16 +448,18 @@ class RamsesFanHandler:
     def _skip_param_polling(device: RamsesRFEntity) -> bool:
         """Return True if the 2411 parameter set shouldn't be polled.
 
-        ramses_rf polls the Orcon parameter set.  A Meltem unit answers
-        those IDs with its own Kennzahlen (other meanings, entities
-        hidden) or not at all, and each unanswered ID is retried, so a
-        sweep costs a lot of airtime for nothing.  The Meltem settings
-        can still be read and written with get_fan_param/set_fan_param.
+        With ramses_rf up to 0.61.4, the polled set is the Orcon one.  A
+        Meltem unit answers those IDs with its own Kennzahlen (other
+        meanings, entities hidden) or not at all, and each unanswered ID
+        is retried, so a sweep costs a lot of airtime for nothing.  With
+        ramses_rf's Meltem strategy, the Meltem set is polled instead
+        (the unit answers all of it).  The Meltem settings can always be
+        read and written with get_fan_param/set_fan_param.
 
         :param device: The FAN device.
-        :return: True for Meltem units.
+        :return: True for Meltem units decoded as Orcon FANs.
         """
-        if is_meltem(device):
+        if is_meltem(device) and not rf_decodes_meltem(device):
             _LOGGER.debug(
                 "Skipping 2411 parameter polling for Meltem unit %s", device.id
             )

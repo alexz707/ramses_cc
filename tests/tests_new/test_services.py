@@ -6102,3 +6102,29 @@ async def test_set_polling_interval_service(
     mock_dev_valid.set_polling_interval.side_effect = None
     await handler.async_set_polling_interval(call)
     mock_dev_valid.set_polling_interval.assert_called_with(300)
+
+
+async def test_update_fan_params_sequence_uses_meltem_set(
+    mock_coordinator: RamsesCoordinator,
+    mock_fan_device: MagicMock,
+) -> None:
+    """A Meltem unit decoded by ramses_rf is polled with its own set."""
+    # Arrange
+    mock_coordinator.get_device = MagicMock(return_value=mock_fan_device)
+    meltem_set = {"0D": {}, "0E": {}, "0F": {}}
+
+    # Act
+    with (
+        patch(
+            "custom_components.ramses_cc.services.meltem_param_schema",
+            return_value=meltem_set,
+        ),
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
+        await mock_coordinator.service_handler.async_run_fan_param_sequence(
+            {"device_id": FAN_ID}
+        )
+
+    # Assert: one request per Meltem parameter, not the generic ~30
+    mock_client = cast(Any, mock_coordinator.client)
+    assert mock_client.dispatcher.send.call_count == 3

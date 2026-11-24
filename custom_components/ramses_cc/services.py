@@ -75,6 +75,7 @@ from .helpers import (
     parse_packet_string,
     remove_from_include_lists,
 )
+from .meltem import meltem_param_schema
 
 if TYPE_CHECKING:
     from .coordinator import RamsesCoordinator
@@ -797,8 +798,15 @@ class RamsesServiceHandler:
 
         self._fan_param_sequences[device_key] = current_task
 
+        # The device's own parameter set (e.g. the Meltem Kennzahlen with
+        # ramses_rf's Meltem strategy), else ramses_rf's generic set.
+        param_ids = list(
+            meltem_param_schema(self._coordinator.get_device(device_id))
+            or _2411_PARAMS_SCHEMA
+        )
+
         try:
-            for index, param_id in enumerate(_2411_PARAMS_SCHEMA):
+            for index, param_id in enumerate(param_ids):
                 try:
                     try:
                         param_data = dict(data)
@@ -811,7 +819,7 @@ class RamsesServiceHandler:
                     param_data["param_id"] = param_id
                     await self.async_get_fan_param(param_data)
 
-                    if index < len(_2411_PARAMS_SCHEMA) - 1:
+                    if index < len(param_ids) - 1:
                         await asyncio.sleep(0.5)
 
                 except ProtocolTimeoutError as err:

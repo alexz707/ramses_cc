@@ -4,6 +4,7 @@ The expected payloads are the W 22F4 frames verified on a real
 M-WRG-S M unit (32:150093, Nov 2026).
 """
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -32,13 +33,17 @@ from custom_components.ramses_cc.meltem import (
     meltem_fan_mode,
     meltem_hides_key,
     meltem_is_off,
+    meltem_param_schema,
+    rf_decodes_meltem,
 )
+from custom_components.ramses_cc.number import get_param_descriptions
 from custom_components.ramses_cc.remote import (
     RamsesRemote,
     RamsesRemoteEntityDescription,
 )
 from custom_components.ramses_cc.schemas import SCH_SET_MELTEM_AIRFLOW
 from ramses_rf.devices import HvacVentilator
+from ramses_rf.strategies.base import HvacStrategyBase
 from ramses_rf.strategies.orcon import OrconStrategy
 
 FAN_ID = "32:150093"
@@ -680,3 +685,215 @@ def test_hvac_description_has_fan_mode_translation_key() -> None:
     # Act / Assert: translations name boost/supply_only/extract_only
     assert description.translation_key == "hvac"
     assert description.name is None  # still named after the device
+
+
+# --- with ramses_rf's Meltem strategy (ramses_rf > 0.61.4) -------------------
+
+
+class _RfMeltemStrategy(HvacStrategyBase):
+    """Stand-in for ramses_rf's MeltemStrategy (not in ramses_rf 0.61.4)."""
+
+    scheme = "meltem"
+
+    @property
+    def fan_params(self) -> dict[str, Any]:
+        return {
+            "0D": SimpleNamespace(
+                description="LOW (level I) airflow (m³/h)",
+                min_value=0,
+                max_value=100,
+                precision=10,
+                data_type="00",
+                data_unit="m³/h",
+            )
+        }
+
+
+def _rf_meltem_device() -> MagicMock:
+    device = MagicMock(spec=HvacVentilator)
+    device.id = FAN_ID
+    device.model = "VMD-22RES22"
+    device.get_configured_strategy = MagicMock(
+        return_value=_RfMeltemStrategy()
+    )
+    return device
+
+
+def test_meltem_is_off_accepts_rf_meltem_name() -> None:
+    # Arrange / Act / Assert: "paused" (generic decode), "off" (Meltem)
+    assert meltem_is_off("off") is True
+    assert meltem_is_off("paused") is True
+
+
+def test_rf_decodes_meltem() -> None:
+    # Arrange
+    orcon = MagicMock(spec=HvacVentilator)
+    orcon.get_configured_strategy = MagicMock(return_value=OrconStrategy())
+
+    # Act / Assert
+    assert rf_decodes_meltem(_rf_meltem_device()) is True
+    assert rf_decodes_meltem(orcon) is False
+
+
+def test_meltem_param_schema_from_rf_strategy() -> None:
+    # Arrange
+    orcon = MagicMock(spec=HvacVentilator)
+    orcon.get_configured_strategy = MagicMock(return_value=OrconStrategy())
+
+    # Act
+    schema = meltem_param_schema(_rf_meltem_device())
+
+    # Assert
+    assert schema == {
+        "0D": {
+            "description": "LOW (level I) airflow (m³/h)",
+            "min_value": 0,
+            "max_value": 100,
+            "precision": 10,
+            "data_type": "00",
+            "data_unit": "m³/h",
+        }
+    }
+    assert meltem_param_schema(orcon) is None
+
+
+@pytest.mark.parametrize(
+    ("key", "hidden"),
+    [
+        ("fan_mode", False),  # decoded from 22F4
+        ("fan_rate", False),  # airflow
+        ("filter_remaining", False),  # filter days from 10D0
+        ("param_0D", False),  # Meltem set with correct names
+        ("fan_info", True),  # still Orcon labels
+        ("indoor_humidity", True),
+        ("has_fault", True),
+    ],
+)
+def test_meltem_hides_key_with_rf_decoding(key: str, hidden: bool) -> None:
+    # Arrange / Act / Assert
+    assert meltem_hides_key(key, rf_decodes=True) is hidden
+
+
+def test_entity_hidden_before_is_unhidden_with_rf_decoding() -> None:
+    # Arrange: hidden by ramses_cc while ramses_rf decoded it as Orcon
+    entity, registry = _meltem_entity("fan_rate")
+    entity._device = _rf_meltem_device()
+    registry.async_get.return_value = MagicMock(
+        hidden_by=er.RegistryEntryHider.INTEGRATION,
+        options={"ramses_cc": {"meltem_hidden": True}},
+    )
+
+    # Act
+    _hide(entity, registry)
+
+    # Assert
+    registry.async_update_entity.assert_called_once_with(
+        entity.entity_id, hidden_by=None
+    )
+    registry.async_update_entity_options.assert_called_once_with(
+        entity.entity_id, "ramses_cc", {}
+    )
+
+
+def test_user_hidden_entity_stays_hidden_with_rf_decoding() -> None:
+    # Arrange: the user hid it themselves
+    entity, registry = _meltem_entity("fan_rate")
+    entity._device = _rf_meltem_device()
+    registry.async_get.return_value = MagicMock(
+        hidden_by=er.RegistryEntryHider.USER,
+        options={"ramses_cc": {"meltem_hidden": True}},
+    )
+
+    # Act
+    _hide(entity, registry)
+
+    # Assert: only the marker is cleared
+    registry.async_update_entity.assert_not_called()
+    registry.async_update_entity_options.assert_called_once_with(
+        entity.entity_id, "ramses_cc", {}
+    )
+
+
+def test_never_hidden_entity_untouched_with_rf_decoding() -> None:
+    # Arrange
+    entity, registry = _meltem_entity("param_0D")
+    entity._device = _rf_meltem_device()
+
+    # Act
+    _hide(entity, registry)
+
+    # Assert
+    registry.async_update_entity.assert_not_called()
+    registry.async_update_entity_options.assert_not_called()
+    assert entity.entity_registry_visible_default is True
+
+
+def test_param_descriptions_use_meltem_set() -> None:
+    # Arrange
+    device = _rf_meltem_device()
+    device.supports_2411 = True
+
+    # Act
+    descriptions = get_param_descriptions(device)
+
+    # Assert
+    assert [d.key for d in descriptions] == ["param_0D"]
+    assert descriptions[0].name == "LOW (level I) airflow (m³/h)"
+    assert descriptions[0].unit_of_measurement == "m³/h"
+
+
+def test_real_rf_meltem_strategy_if_available() -> None:
+    # Arrange: ramses_rf with its Meltem strategy (skipped on 0.61.4)
+    meltem = pytest.importorskip("ramses_rf.strategies.meltem")
+    device = MagicMock(spec=HvacVentilator)
+    device.model = "VMD-22RES22"
+    device.get_configured_strategy = MagicMock(
+        return_value=meltem.MeltemStrategy()
+    )
+
+    # Act
+    schema = meltem_param_schema(device)
+
+    # Assert
+    assert rf_decodes_meltem(device) is True
+    assert schema is not None
+    assert schema["0D"]["description"] == "LOW (level I) airflow (m³/h)"
+    assert "5D" not in schema  # factory reset
+
+
+@pytest.mark.parametrize(
+    ("rf_mode", "expected"),
+    [
+        ("medium", "medium"),  # decoded by ramses_rf from 22F4
+        ("extract_only", "extract_only"),
+        ("off", "off"),
+        ("manual", "speed 4"),  # free airflow: from the 31DA level
+    ],
+)
+def test_climate_fan_mode_from_rf_meltem_decoding(
+    rf_mode: str, expected: str
+) -> None:
+    # Arrange
+    hvac, device, _ = _meltem_hvac()
+    device.get_configured_strategy = MagicMock(
+        return_value=_RfMeltemStrategy()
+    )
+    device.hvac_state.fan_mode = rf_mode
+    hvac._get_cached_fan_info = MagicMock(  # type: ignore[method-assign]
+        return_value="speed 4"
+    )
+
+    # Act / Assert
+    assert hvac.fan_mode == expected
+
+
+def test_climate_fan_mode_ignores_rf_mode_without_meltem_strategy() -> None:
+    # Arrange: ramses_rf 0.61.4 decodes 22F4 mode 3 as "manual" too
+    hvac, device, _ = _meltem_hvac()
+    device.hvac_state.fan_mode = "medium"  # e.g. stale or foreign value
+    hvac._get_cached_fan_info = MagicMock(  # type: ignore[method-assign]
+        return_value="speed 3, high"
+    )
+
+    # Act / Assert
+    assert hvac.fan_mode == "speed 3"

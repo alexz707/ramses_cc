@@ -45,9 +45,21 @@ from homeassistant.components.climate.const import (
 )
 from homeassistant.exceptions import HomeAssistantError
 
+from ramses_rf import (
+    SZ_DATA_TYPE,
+    SZ_DATA_UNIT,
+    SZ_DESCRIPTION,
+    SZ_MAX_VALUE,
+    SZ_MIN_VALUE,
+    SZ_PRECISION,
+)
 from ramses_tx.const import Priority
 
-from .helpers import device_gateway, parse_packet_string
+from .helpers import (
+    configured_hvac_strategy,
+    device_gateway,
+    parse_packet_string,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -177,26 +189,82 @@ def airflow_payload(supply: int, extract: int | None = None) -> str:
     return _payload(_MODE_UNBALANCED, supply_code, extract_code)
 
 
-#: ramses_rf's 22F4 fan_mode for mode byte 0x20 (Meltem mode 1, "off")
-_22F4_MODE_OFF: Final = "paused"
+#: ramses_rf's 22F4 fan_mode for mode byte 0x20 (Meltem mode 1, "off"):
+#: "paused" with the generic decode, "off" with ramses_rf's Meltem strategy
+_22F4_MODES_OFF: Final = frozenset({"paused", "off"})
+
+#: ramses_rf scheme name of the Meltem strategy (ramses_rf > 0.61.4)
+_RF_MELTEM_SCHEME: Final = "meltem"
 
 
 def meltem_is_off(fan_mode_22f4: Any) -> bool:
     """Return True if the unit's 22F4 status says it is off.
 
     In off mode the unit's 31DA reports fan_info ``00`` ("off"), but
-    ramses_rf never lets an "off" fan_info replace an earlier value (a
-    quirk for FANs that send it as a placeholder), so the 31DA state
-    stays at the last level.  The unit's own 22F4 echo, sent after every
-    change and every 10 minutes, carries the mode: ramses_rf decodes
-    mode byte ``0x20`` (mode 1, off) as fan_mode ``"paused"``.
+    ramses_rf (up to 0.61.4) never lets an "off" fan_info replace an
+    earlier value (a quirk for FANs that send it as a placeholder), so
+    the 31DA state stays at the last level.  The unit's own 22F4 echo,
+    sent after every change and every 10 minutes, carries the mode:
+    ramses_rf decodes mode byte ``0x20`` (mode 1, off) as fan_mode
+    ``"paused"``, or ``"off"`` with its Meltem strategy.
 
     :param fan_mode_22f4: The FAN's ``hvac_state.fan_mode``.
     :type fan_mode_22f4: Any
     :returns: True if the unit reports mode 1 (off).
     :rtype: bool
     """
-    return fan_mode_22f4 == _22F4_MODE_OFF
+    return fan_mode_22f4 in _22F4_MODES_OFF
+
+
+def rf_decodes_meltem(device: Any) -> bool:
+    """Return True if ramses_rf decodes this FAN with its Meltem strategy.
+
+    ramses_rf releases after 0.61.4 have a Meltem strategy, selected by
+    the 10E0 model: it decodes the 22F4 mode and airflow, the 10D0 filter
+    days and the Meltem 2411 parameter set.  With older releases the unit
+    is decoded as an Orcon FAN.
+
+    :param device: The ramses_rf device (e.g. an ``HvacVentilator``).
+    :type device: Any
+    :returns: True if the configured strategy is ramses_rf's Meltem one.
+    :rtype: bool
+    """
+    strategy = configured_hvac_strategy(device)
+    return getattr(strategy, "scheme", None) == _RF_MELTEM_SCHEME
+
+
+def meltem_param_schema(device: Any) -> dict[str, Any] | None:
+    """Return the Meltem 2411 parameter set for a FAN, if ramses_rf has it.
+
+    For a Meltem unit decoded by ramses_rf's Meltem strategy, that's the
+    strategy's set (the Meltem Kennzahlen with their names and ranges).
+    Otherwise None: callers use ramses_rf's generic set, as before.
+
+    :param device: The ramses_rf device (e.g. an ``HvacVentilator``).
+    :type device: Any
+    :returns: Parameter ID → dict with description, min/max value,
+        precision, data type and unit, or None.
+    :rtype: dict[str, Any] | None
+    """
+    strategy = configured_hvac_strategy(device)
+    fan_params = getattr(strategy, "fan_params", None)
+    if (
+        getattr(strategy, "scheme", None) != _RF_MELTEM_SCHEME
+        or not isinstance(fan_params, dict)
+        or not fan_params
+    ):
+        return None
+    return {
+        param_id: {
+            SZ_DESCRIPTION: info.description,
+            SZ_MIN_VALUE: info.min_value,
+            SZ_MAX_VALUE: info.max_value,
+            SZ_PRECISION: info.precision,
+            SZ_DATA_TYPE: info.data_type,
+            SZ_DATA_UNIT: info.data_unit,
+        }
+        for param_id, info in fan_params.items()
+    }
 
 
 def fan_speed_airflow(speed: Any) -> int | None:
@@ -369,15 +437,29 @@ MELTEM_HIDDEN_KEYS: Final[frozenset[str]] = frozenset(
 _PARAM_KEY_PREFIX: Final = "param_"
 
 
-def meltem_hides_key(key: str | None) -> bool:
+#: Keys that carry real values when ramses_rf decodes the unit with its
+#: Meltem strategy (mode and airflow from 22F4, filter days from 10D0); the
+#: 2411 parameter entities then use the Meltem set with correct names.
+_RF_DECODED_KEYS: Final[frozenset[str]] = frozenset(
+    {"fan_mode", "fan_rate", "filter_remaining"}
+)
+
+
+def meltem_hides_key(key: str | None, rf_decodes: bool = False) -> bool:
     """Return True if an entity with this key is hidden on Meltem units.
 
     :param key: The entity description key.
     :type key: str | None
+    :param rf_decodes: True if ramses_rf decodes the unit with its Meltem
+        strategy (see :func:`rf_decodes_meltem`).
+    :type rf_decodes: bool
     :returns: True for the keys in MELTEM_HIDDEN_KEYS and all 2411
-        parameter entities.
+        parameter entities; with ``rf_decodes``, only for the keys that
+        still have no value.
     :rtype: bool
     """
     if not key:
         return False
+    if rf_decodes:
+        return key in MELTEM_HIDDEN_KEYS and key not in _RF_DECODED_KEYS
     return key in MELTEM_HIDDEN_KEYS or key.startswith(_PARAM_KEY_PREFIX)

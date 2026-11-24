@@ -79,6 +79,7 @@ from .const import DOMAIN
 from .coordinator import RamsesCoordinator
 from .entity import RamsesEntity, RamsesEntityDescription
 from .helpers import device_slug, normalize_device_id
+from .meltem import meltem_param_schema
 from .typing import RamsesConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
@@ -680,6 +681,9 @@ class RamsesNumberParam(RamsesNumberBase):
             hasattr(entity_description, "unit_of_measurement")
             and entity_description.unit_of_measurement == "%"
             and param_id not in ("52",)  # Don't scale parameter 52
+            # data type 00 is a plain integer, e.g. Meltem Kennzahl 36 (60 %),
+            # not a 0-1 fraction like the Orcon fan rates (0F/90)
+            and getattr(entity_description, "data_type", None) != "00"
         )
 
         # Set min/max/step values from entity description if available
@@ -1167,7 +1171,10 @@ def get_param_descriptions(
 
     descriptions: list[RamsesNumberEntityDescription] = []
 
-    for param_id, param_info in _2411_PARAMS_SCHEMA.items():
+    # The device's own set (e.g. the Meltem Kennzahlen with ramses_rf's
+    # Meltem strategy), else ramses_rf's generic set.
+    schema = meltem_param_schema(device) or _2411_PARAMS_SCHEMA
+    for param_id, param_info in schema.items():
         # Determine precision and mode based on parameter type
         precision = float(param_info.get(SZ_PRECISION, 1.0))
         mode = "auto"

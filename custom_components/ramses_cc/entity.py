@@ -24,7 +24,7 @@ from .helpers import (
     reset_async_attr_cooldown,
     resolve_async_attr,
 )
-from .meltem import is_meltem, meltem_hides_key
+from .meltem import is_meltem, meltem_hides_key, rf_decodes_meltem
 
 if TYPE_CHECKING:
     from homeassistant.helpers.device_registry import ChildDeviceInfo
@@ -256,8 +256,8 @@ class RamsesEntity(CoordinatorEntity):
 
     def _is_unused_meltem_entity(self) -> bool:
         """Return True if this entity has no data on a Meltem unit."""
-        return meltem_hides_key(self._description_key()) and is_meltem(
-            self._device
+        return is_meltem(self._device) and meltem_hides_key(
+            self._description_key(), rf_decodes_meltem(self._device)
         )
 
     def _description_key(self) -> str | None:
@@ -272,6 +272,10 @@ class RamsesEntity(CoordinatorEntity):
         10E0 model arrives after the first setup).  A marker in the
         entity's registry options records that this was done, so an
         entity the user has unhidden stays visible.
+
+        Once ramses_rf decodes the unit with its Meltem strategy, some of
+        these entities carry values: an entity hidden this way (marker
+        set, still hidden by the integration) is then unhidden once.
         """
         if getattr(self, "_meltem_hide_checked", False):
             return
@@ -288,6 +292,24 @@ class RamsesEntity(CoordinatorEntity):
         if (entry := ent_reg.async_get(self.entity_id)) is None:
             return
         options = dict(entry.options.get(DOMAIN, {}))
+
+        if not meltem_hides_key(
+            self._description_key(), rf_decodes_meltem(self._device)
+        ):
+            if not options.get(_OPT_MELTEM_HIDDEN):
+                return
+            if entry.hidden_by == er.RegistryEntryHider.INTEGRATION:
+                _LOGGER.debug(
+                    "Unhiding %s: ramses_rf decodes it for Meltem units",
+                    self.entity_id,
+                )
+                ent_reg.async_update_entity(self.entity_id, hidden_by=None)
+            options.pop(_OPT_MELTEM_HIDDEN)
+            ent_reg.async_update_entity_options(
+                self.entity_id, DOMAIN, options
+            )
+            return
+
         if options.get(_OPT_MELTEM_HIDDEN):
             return  # done before; respect the user's choice since then
         if entry.hidden_by is None:
